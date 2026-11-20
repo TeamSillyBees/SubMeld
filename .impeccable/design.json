@@ -1,0 +1,311 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-20T14:43:37.828Z",
+  "title": "Design System: SubMeld",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "操作蓝",
+        "tonalRamp": ["oklch(15% 0.073 267.5)", "oklch(27% 0.141 267.5)", "oklch(38% 0.186 267.5)", "oklch(49% 0.205 267.5)", "oklch(61% 0.189 267.5)", "oklch(73% 0.141 267.5)", "oklch(84% 0.079 267.5)", "oklch(95% 0.018 267.5)"]
+      },
+      "primary-hover": {
+        "role": "primary",
+        "displayName": "操作蓝·悬停",
+        "tonalRamp": ["oklch(15% 0.07 267.2)", "oklch(27% 0.134 267.2)", "oklch(38% 0.178 267.2)", "oklch(49% 0.195 267.2)", "oklch(61% 0.18 267.2)", "oklch(73% 0.134 267.2)", "oklch(84% 0.076 267.2)", "oklch(95% 0.018 267.2)"]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "强调浅蓝",
+        "tonalRamp": ["oklch(15% 0.008 272.8)", "oklch(27% 0.016 272.8)", "oklch(38% 0.021 272.8)", "oklch(49% 0.023 272.8)", "oklch(61% 0.022 272.8)", "oklch(73% 0.016 272.8)", "oklch(84% 0.009 272.8)", "oklch(95% 0.002 272.8)"]
+      },
+      "accent-foreground": {
+        "role": "primary",
+        "displayName": "强调蓝字",
+        "tonalRamp": ["oklch(15% 0.066 267.3)", "oklch(27% 0.126 267.3)", "oklch(38% 0.167 267.3)", "oklch(49% 0.183 267.3)", "oklch(61% 0.169 267.3)", "oklch(73% 0.126 267.3)", "oklch(84% 0.071 267.3)", "oklch(95% 0.016 267.3)"]
+      },
+      "sidebar-selected": {
+        "role": "primary",
+        "displayName": "导航选中底色",
+        "tonalRamp": ["oklch(15% 0.012 276.4)", "oklch(27% 0.023 276.4)", "oklch(38% 0.03 276.4)", "oklch(49% 0.033 276.4)", "oklch(61% 0.03 276.4)", "oklch(73% 0.023 276.4)", "oklch(84% 0.013 276.4)", "oklch(95% 0.003 276.4)"]
+      },
+      "success-ink": {
+        "role": "secondary",
+        "displayName": "可用绿",
+        "tonalRamp": ["oklch(15% 0.032 158)", "oklch(27% 0.062 158)", "oklch(38% 0.082 158)", "oklch(49% 0.09 158)", "oklch(61% 0.083 158)", "oklch(73% 0.062 158)", "oklch(84% 0.035 158)", "oklch(95% 0.008 158)"]
+      },
+      "success-bg": {
+        "role": "secondary",
+        "displayName": "成功浅绿",
+        "tonalRamp": ["oklch(15% 0.005 159.9)", "oklch(27% 0.009 159.9)", "oklch(38% 0.012 159.9)", "oklch(49% 0.013 159.9)", "oklch(61% 0.012 159.9)", "oklch(73% 0.009 159.9)", "oklch(84% 0.005 159.9)", "oklch(95% 0.001 159.9)"]
+      },
+      "warning-ink": {
+        "role": "secondary",
+        "displayName": "提醒琥珀",
+        "tonalRamp": ["oklch(15% 0.036 65.8)", "oklch(27% 0.069 65.8)", "oklch(38% 0.091 65.8)", "oklch(49% 0.1 65.8)", "oklch(61% 0.092 65.8)", "oklch(73% 0.069 65.8)", "oklch(84% 0.039 65.8)", "oklch(95% 0.009 65.8)"]
+      },
+      "warning-bg": {
+        "role": "secondary",
+        "displayName": "提醒浅琥珀",
+        "tonalRamp": ["oklch(15% 0.008 75.9)", "oklch(27% 0.016 75.9)", "oklch(38% 0.021 75.9)", "oklch(49% 0.023 75.9)", "oklch(61% 0.021 75.9)", "oklch(73% 0.016 75.9)", "oklch(84% 0.009 75.9)", "oklch(95% 0.002 75.9)"]
+      },
+      "destructive": {
+        "role": "secondary",
+        "displayName": "错误红",
+        "tonalRamp": ["oklch(15% 0.054 26.6)", "oklch(27% 0.104 26.6)", "oklch(38% 0.137 26.6)", "oklch(49% 0.15 26.6)", "oklch(61% 0.139 26.6)", "oklch(73% 0.104 26.6)", "oklch(84% 0.058 26.6)", "oklch(95% 0.013 26.6)"]
+      },
+      "danger-bg": {
+        "role": "secondary",
+        "displayName": "错误浅红",
+        "tonalRamp": ["oklch(15% 0.006 27.3)", "oklch(27% 0.011 27.3)", "oklch(38% 0.014 27.3)", "oklch(49% 0.015 27.3)", "oklch(61% 0.014 27.3)", "oklch(73% 0.011 27.3)", "oklch(84% 0.006 27.3)", "oklch(95% 0.001 27.3)"]
+      },
+      "background": {
+        "role": "neutral",
+        "displayName": "雾蓝灰画布",
+        "tonalRamp": ["oklch(15% 0.002 264.5)", "oklch(27% 0.004 264.5)", "oklch(38% 0.005 264.5)", "oklch(49% 0.006 264.5)", "oklch(61% 0.005 264.5)", "oklch(73% 0.004 264.5)", "oklch(84% 0.002 264.5)", "oklch(95% 0.001 264.5)"]
+      },
+      "card": {
+        "role": "neutral",
+        "displayName": "面板白",
+        "tonalRamp": ["oklch(15% 0 0)", "oklch(27% 0 0)", "oklch(38% 0 0)", "oklch(49% 0 0)", "oklch(61% 0 0)", "oklch(73% 0 0)", "oklch(84% 0 0)", "oklch(95% 0 0)"]
+      },
+      "panel-wash": {
+        "role": "neutral",
+        "displayName": "面板操作区",
+        "tonalRamp": ["oklch(15% 0.001 264.5)", "oklch(27% 0.002 264.5)", "oklch(38% 0.003 264.5)", "oklch(49% 0.003 264.5)", "oklch(61% 0.003 264.5)", "oklch(73% 0.002 264.5)", "oklch(84% 0.001 264.5)", "oklch(95% 0 264.5)"]
+      },
+      "sidebar": {
+        "role": "neutral",
+        "displayName": "侧栏浅灰",
+        "tonalRamp": ["oklch(15% 0.001 247.9)", "oklch(27% 0.002 247.9)", "oklch(38% 0.003 247.9)", "oklch(49% 0.003 247.9)", "oklch(61% 0.003 247.9)", "oklch(73% 0.002 247.9)", "oklch(84% 0.001 247.9)", "oklch(95% 0 247.9)"]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "辅助底色",
+        "tonalRamp": ["oklch(15% 0.002 255.5)", "oklch(27% 0.004 255.5)", "oklch(38% 0.006 255.5)", "oklch(49% 0.006 255.5)", "oklch(61% 0.006 255.5)", "oklch(73% 0.004 255.5)", "oklch(84% 0.002 255.5)", "oklch(95% 0.001 255.5)"]
+      },
+      "secondary": {
+        "role": "neutral",
+        "displayName": "计数与轨道底色",
+        "tonalRamp": ["oklch(15% 0.003 253.9)", "oklch(27% 0.005 253.9)", "oklch(38% 0.007 253.9)", "oklch(49% 0.008 253.9)", "oklch(61% 0.007 253.9)", "oklch(73% 0.005 253.9)", "oklch(84% 0.003 253.9)", "oklch(95% 0.001 253.9)"]
+      },
+      "sidebar-hover": {
+        "role": "neutral",
+        "displayName": "导航悬停底色",
+        "tonalRamp": ["oklch(15% 0.005 266.7)", "oklch(27% 0.009 266.7)", "oklch(38% 0.012 266.7)", "oklch(49% 0.013 266.7)", "oklch(61% 0.012 266.7)", "oklch(73% 0.009 266.7)", "oklch(84% 0.005 266.7)", "oklch(95% 0.001 266.7)"]
+      },
+      "foreground": {
+        "role": "neutral",
+        "displayName": "正文墨蓝",
+        "tonalRamp": ["oklch(15% 0.014 264.1)", "oklch(27% 0.027 264.1)", "oklch(38% 0.036 264.1)", "oklch(49% 0.04 264.1)", "oklch(61% 0.037 264.1)", "oklch(73% 0.027 264.1)", "oklch(84% 0.015 264.1)", "oklch(95% 0.004 264.1)"]
+      },
+      "muted-foreground": {
+        "role": "neutral",
+        "displayName": "说明灰蓝",
+        "tonalRamp": ["oklch(15% 0.017 260.8)", "oklch(27% 0.033 260.8)", "oklch(38% 0.043 260.8)", "oklch(49% 0.048 260.8)", "oklch(61% 0.044 260.8)", "oklch(73% 0.033 260.8)", "oklch(84% 0.018 260.8)", "oklch(95% 0.004 260.8)"]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "分隔线",
+        "tonalRamp": ["oklch(15% 0.006 262.8)", "oklch(27% 0.011 262.8)", "oklch(38% 0.015 262.8)", "oklch(49% 0.016 262.8)", "oklch(61% 0.015 262.8)", "oklch(73% 0.011 262.8)", "oklch(84% 0.006 262.8)", "oklch(95% 0.001 262.8)"]
+      },
+      "input": {
+        "role": "neutral",
+        "displayName": "输入框边线",
+        "tonalRamp": ["oklch(15% 0.014 262.7)", "oklch(27% 0.027 262.7)", "oklch(38% 0.035 262.7)", "oklch(49% 0.039 262.7)", "oklch(61% 0.036 262.7)", "oklch(73% 0.027 262.7)", "oklch(84% 0.015 262.7)", "oklch(95% 0.003 262.7)"]
+      },
+      "ring": {
+        "role": "primary",
+        "displayName": "焦点环",
+        "tonalRamp": ["oklch(15% 0.06 266.3)", "oklch(27% 0.115 266.3)", "oklch(38% 0.153 266.3)", "oklch(49% 0.168 266.3)", "oklch(61% 0.155 266.3)", "oklch(73% 0.115 266.3)", "oklch(84% 0.065 266.3)", "oklch(95% 0.015 266.3)"]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "页面标题",
+        "purpose": "用于配置页的一级标题。"
+      },
+      "title": {
+        "displayName": "面板标题",
+        "purpose": "用于卡片中的二级标题。"
+      },
+      "metric": {
+        "displayName": "指标读数",
+        "purpose": "用于概览指标与最近成功、下次计划的时刻。"
+      },
+      "body": {
+        "displayName": "正文",
+        "purpose": "用于说明与工作区内容。"
+      },
+      "caption": {
+        "displayName": "辅助标签",
+        "purpose": "用于状态标签、次级操作和时间说明。"
+      }
+    },
+    "shadows": [
+      {
+        "name": "panel-shadow",
+        "value": "0 1px 2px rgb(22 44 84 / 4%)",
+        "purpose": "指标卡与工作面板的静态阴影。"
+      }
+    ],
+    "motion": [
+      {
+        "name": "button",
+        "value": "130ms ease",
+        "purpose": "按钮的背景色与边线过渡。"
+      },
+      {
+        "name": "metric-arrow",
+        "value": "150ms ease-out",
+        "purpose": "悬停时指标卡箭头轻微右移。"
+      },
+      {
+        "name": "reduced-motion",
+        "value": ".01ms",
+        "purpose": "系统请求减少动态效果时，压缩动画与过渡时长。"
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "顶栏摘要隐藏（视口上限）",
+        "value": "67rem"
+      },
+      {
+        "name": "导航抽屉（视口上限）",
+        "value": "767px"
+      },
+      {
+        "name": "触控布局（视口上限，粗指针也适用）",
+        "value": "37rem"
+      },
+      {
+        "name": "概览单列（概览容器上限）",
+        "value": "50rem"
+      },
+      {
+        "name": "表格逐行重排（表格容器上限）",
+        "value": "39rem"
+      },
+      {
+        "name": "机场占比分行（占比面板上限）",
+        "value": "28rem"
+      },
+      {
+        "name": "精简指标布局（概览容器上限）",
+        "value": "26rem"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "主按钮",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "提交编辑结果。",
+      "html": "<button type=\"button\" class=\"ds-button-primary\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M20 6 9 17l-5-5\"/></svg>保存代理组</button>",
+      "css": ".ds-button-primary { display: inline-flex; align-items: center; justify-content: center; gap: .375rem; min-height: 2.125rem; padding: 0 .625rem 0 .5rem; border: 1px solid transparent; border-radius: var(--radius, .5rem); font: 500 var(--ui-text, clamp(.875rem, .63vw, 1rem))/1.25rem var(--font-sans, \"Segoe UI Variable Text\", \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif); white-space: nowrap; cursor: pointer; transition: background-color 130ms ease, border-color 130ms ease; background: var(--primary, #4166eb); color: var(--primary-foreground, #fff); }\n.ds-button-primary:hover { background: var(--primary-hover, #3152ce); }\n.ds-button-primary:focus-visible { outline: none; border-color: var(--ring, #4166cf); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring, #4166cf) 50%, transparent); }\n.ds-button-primary:active:not(:disabled) { transform: translateY(1px); }\n.ds-button-primary:disabled { pointer-events: none; opacity: .5; }\n@media (max-width: 37rem), (pointer: coarse) { .ds-button-primary { min-height: 2.75rem; } }\n@media (prefers-reduced-motion: reduce) { .ds-button-primary { transition-duration: .01ms; } }"
+    },
+    {
+      "name": "描边按钮",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "常规操作，例如下载配置。",
+      "html": "<button type=\"button\" class=\"ds-button-outline\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 15V3\"/><path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/><path d=\"m7 10 5 5 5-5\"/></svg>下载 YAML</button>",
+      "css": ".ds-button-outline { display: inline-flex; align-items: center; justify-content: center; gap: .375rem; min-height: 2.125rem; padding: 0 .625rem 0 .5rem; border: 1px solid transparent; border-radius: var(--radius, .5rem); font: 500 var(--ui-text, clamp(.875rem, .63vw, 1rem))/1.25rem var(--font-sans, \"Segoe UI Variable Text\", \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif); white-space: nowrap; cursor: pointer; transition: background-color 130ms ease, border-color 130ms ease; background: var(--muted, #f3f6fa); border-color: var(--border, #dfe5f0); color: var(--foreground, #10192c); }\n.ds-button-outline:hover { background: var(--sidebar-hover, #edf1fa); border-color: var(--input, #8a97af); }\n.ds-button-outline:focus-visible { outline: none; border-color: var(--ring, #4166cf); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring, #4166cf) 50%, transparent); }\n.ds-button-outline:active:not(:disabled) { transform: translateY(1px); }\n.ds-button-outline:disabled { pointer-events: none; opacity: .5; }\n@media (max-width: 37rem), (pointer: coarse) { .ds-button-outline { min-height: 2.75rem; } }\n@media (prefers-reduced-motion: reduce) { .ds-button-outline { transition-duration: .01ms; } }"
+    },
+    {
+      "name": "透明按钮",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "编辑器中与保存并列的取消操作。",
+      "html": "<button type=\"button\" class=\"ds-button-ghost\">取消</button>",
+      "css": ".ds-button-ghost { display: inline-flex; align-items: center; justify-content: center; gap: .375rem; min-height: 2.125rem; padding: 0 .625rem; border: 1px solid transparent; border-radius: var(--radius, .5rem); font: 500 var(--ui-text, clamp(.875rem, .63vw, 1rem))/1.25rem var(--font-sans, \"Segoe UI Variable Text\", \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif); white-space: nowrap; cursor: pointer; transition: background-color 130ms ease, border-color 130ms ease; background: transparent; color: var(--foreground, #10192c); }\n.ds-button-ghost:hover { background: var(--muted, #f3f6fa); }\n.ds-button-ghost:focus-visible { outline: none; border-color: var(--ring, #4166cf); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring, #4166cf) 50%, transparent); }\n.ds-button-ghost:active:not(:disabled) { transform: translateY(1px); }\n.ds-button-ghost:disabled { pointer-events: none; opacity: .5; }\n@media (max-width: 37rem), (pointer: coarse) { .ds-button-ghost { min-height: 2.75rem; } }\n@media (prefers-reduced-motion: reduce) { .ds-button-ghost { transition-duration: .01ms; } }"
+    },
+    {
+      "name": "危险按钮",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "确认删除或撤销私有链接。",
+      "html": "<button type=\"button\" class=\"ds-button-danger\">确认删除</button>",
+      "css": ".ds-button-danger { display: inline-flex; align-items: center; justify-content: center; gap: .375rem; min-height: 2.125rem; padding: 0 .625rem; border: 1px solid transparent; border-radius: var(--radius, .5rem); font: 500 var(--ui-text, clamp(.875rem, .63vw, 1rem))/1.25rem var(--font-sans, \"Segoe UI Variable Text\", \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif); white-space: nowrap; cursor: pointer; transition: background-color 130ms ease, border-color 130ms ease; background: color-mix(in oklab, var(--destructive, #a73530) 10%, transparent); color: var(--destructive, #a73530); }\n.ds-button-danger:hover { background: color-mix(in oklab, var(--destructive, #a73530) 20%, transparent); }\n.ds-button-danger:focus-visible { outline: none; border-color: color-mix(in oklab, var(--destructive, #a73530) 40%, transparent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--destructive, #a73530) 20%, transparent); }\n.ds-button-danger:active:not(:disabled) { transform: translateY(1px); }\n.ds-button-danger:disabled { pointer-events: none; opacity: .5; }\n@media (max-width: 37rem), (pointer: coarse) { .ds-button-danger { min-height: 2.75rem; } }\n@media (prefers-reduced-motion: reduce) { .ds-button-danger { transition-duration: .01ms; } }"
+    },
+    {
+      "name": "带标签的输入框",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "机场展示名称的文本输入。",
+      "html": "<label class=\"ds-input-label\">机场展示名称<input class=\"ds-input\" type=\"text\" name=\"source_name\" maxlength=\"256\" placeholder=\"例如主力机场\" autocomplete=\"off\"></label>",
+      "css": ".ds-input-label { display: grid; gap: .5rem; color: var(--foreground, #10192c); font: 650 .875rem/1.375 var(--font-sans, \"Segoe UI Variable Text\", \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif); }\n.ds-input { min-width: 0; min-height: 2.125rem; padding: .25rem .625rem; border: 1px solid var(--input, #8a97af); border-radius: var(--radius, .5rem); background: transparent; color: var(--foreground, #10192c); caret-color: var(--primary, #4166eb); font: 400 1rem/1.5 var(--font-sans, \"Segoe UI Variable Text\", \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif); }\n.ds-input::placeholder { color: var(--muted-foreground, #54647f); }\n.ds-input:focus-visible { outline: none; border-color: var(--ring, #4166cf); box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring, #4166cf) 50%, transparent); }\n.ds-input[aria-invalid=true] { border-color: var(--destructive, #a73530); box-shadow: 0 0 0 3px color-mix(in oklab, var(--destructive, #a73530) 20%, transparent); }\n.ds-input:disabled { pointer-events: none; opacity: .5; background: color-mix(in oklab, var(--input, #8a97af) 50%, transparent); }\n@media (min-width: 48rem) { .ds-input { font-size: .875rem; line-height: 1.25rem; } }\n@media (max-width: 37rem), (pointer: coarse) { .ds-input { min-height: 2.75rem; font-size: 1rem; } }"
+    },
+    {
+      "name": "当前导航项",
+      "kind": "nav",
+      "refersTo": "nav-current",
+      "description": "当前页的名称、图标和订阅源数量。",
+      "html": "<a class=\"ds-nav\" href=\"#/sources\" aria-current=\"page\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"20\" height=\"8\" x=\"2\" y=\"2\" rx=\"2\" ry=\"2\"/><rect width=\"20\" height=\"8\" x=\"2\" y=\"14\" rx=\"2\" ry=\"2\"/><line x1=\"6\" x2=\"6.01\" y1=\"6\" y2=\"6\"/><line x1=\"6\" x2=\"6.01\" y1=\"18\" y2=\"18\"/></svg><span>订阅源</span><span class=\"ds-count\" aria-hidden=\"true\">3</span></a>",
+      "css": ".ds-nav { display: flex; align-items: center; gap: .65rem; height: clamp(2.05rem, 1.58vw, 2.5rem); padding-inline: .75rem .44rem; border-radius: .65rem; color: var(--foreground, #10192c); font: 400 var(--ui-text, clamp(.875rem, .63vw, 1rem))/1.55 var(--font-sans, \"Segoe UI Variable Text\", \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif); text-decoration: none; }\n.ds-nav:hover, .ds-nav:active { background: var(--sidebar-hover, #edf1fa); }\n.ds-nav[aria-current=page] { color: var(--accent-foreground, #304fc2); background: var(--sidebar-selected, #e2e7ff); font-weight: 650; }\n.ds-nav:focus-visible { outline: 2px solid var(--ring, #4166cf); outline-offset: 1px; }\n.ds-count { min-width: 1.25rem; margin-inline-start: auto; padding: .12rem .38rem; border-radius: 2rem; background: var(--secondary, #eef2f7); color: var(--muted-foreground, #54647f); font: 500 .73rem/1.4 var(--font-mono, \"Cascadia Mono\", \"SFMono-Regular\", Consolas, \"Liberation Mono\", \"Microsoft YaHei UI\", monospace); text-align: center; }"
+    },
+    {
+      "name": "状态标签",
+      "kind": "chip",
+      "refersTo": "badge-success",
+      "description": "订阅源可用时显示绿色圆点与文字。",
+      "html": "<span class=\"ds-source-status\"><span aria-hidden=\"true\"></span>可用</span>",
+      "css": ".ds-source-status { display: inline-flex; align-items: center; justify-content: center; gap: .25rem; min-height: clamp(1.32rem, .97vw, 1.54rem); padding: .125rem clamp(.5rem, .46vw, .75rem); border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 2rem; color: var(--success-ink, #276c49); background: var(--success-bg, #eaf4ee); font: 500 var(--ui-caption, clamp(.78rem, .55vw, .88rem))/1rem var(--font-sans, \"Segoe UI Variable Text\", \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif); white-space: nowrap; }\n.ds-source-status > span { width: .42rem; aspect-ratio: 1; border-radius: 50%; background: currentColor; }"
+    },
+    {
+      "name": "工作面板",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "标题行展示刷新状态，两列时刻共用一条中线。",
+      "html": "<section class=\"ds-panel\" aria-label=\"刷新状态\"><header><h2>刷新状态</h2><span class=\"ds-panel-badge\">刷新成功</span></header><dl><div><dt>最近成功</dt><dd><time datetime=\"09:15\">09:15</time></dd></div><div><dt>下次计划</dt><dd><time datetime=\"10:15\">10:15</time></dd></div></dl></section>",
+      "css": ".ds-panel { min-width: 0; overflow: hidden; border: 1px solid var(--border, #dfe5f0); border-radius: var(--panel-radius, clamp(.75rem, .6vw, .95rem)); background: var(--card, #fff); color: var(--foreground, #10192c); box-shadow: var(--panel-shadow, 0 1px 2px rgb(22 44 84 / 4%)); font: 400 var(--ui-text, clamp(.875rem, .63vw, 1rem))/1.55 var(--font-sans, \"Segoe UI Variable Text\", \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif); }\n.ds-panel > header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .55rem; min-height: clamp(3.2rem, 2.8vw, 4.45rem); padding: .75rem var(--panel-pad, clamp(1rem, .82vw, 1.32rem)); border-bottom: 1px solid var(--border, #dfe5f0); }\n.ds-panel h2 { margin: 0; font: 500 clamp(.975rem, .71vw, 1.13rem)/1.35 var(--font-sans, \"Segoe UI Variable Text\", \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif); }\n.ds-panel-badge { display: inline-flex; align-items: center; justify-content: center; gap: .25rem; min-height: clamp(1.32rem, .97vw, 1.54rem); padding: .125rem clamp(.5rem, .46vw, .75rem); border: 1px solid color-mix(in srgb, currentColor 22%, transparent); border-radius: 2rem; color: var(--success-ink, #276c49); background: var(--success-bg, #eaf4ee); font: 500 var(--ui-caption, clamp(.78rem, .55vw, .88rem))/1rem var(--font-sans, \"Segoe UI Variable Text\", \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif); white-space: nowrap; }\n.ds-panel dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: var(--panel-pad, clamp(1rem, .82vw, 1.32rem)); border: 1px solid var(--border, #dfe5f0); border-radius: .65rem; background: var(--panel-wash, #fbfcfe); }\n.ds-panel dl > div { min-width: 0; padding: clamp(.7rem, .77vw, 1.2rem) clamp(.7rem, .65vw, 1.05rem); }\n.ds-panel dl > div + div { border-inline-start: 1px solid var(--border, #dfe5f0); }\n.ds-panel dt { color: var(--muted-foreground, #54647f); font-size: var(--ui-caption, clamp(.78rem, .55vw, .88rem)); }\n.ds-panel dd { margin: .25rem 0; font: 500 clamp(1.24rem, 1.02vw, 1.65rem)/1.25 var(--font-mono, \"Cascadia Mono\", \"SFMono-Regular\", Consolas, \"Liberation Mono\", \"Microsoft YaHei UI\", monospace); }"
+    },
+    {
+      "name": "指标卡",
+      "kind": "card",
+      "refersTo": "metric-card",
+      "description": "上游机场启用数、总数和节点数共同链接至订阅源。",
+      "html": "<a class=\"ds-metric\" href=\"#/sources\"><span class=\"ds-metric-label\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"20\" height=\"8\" x=\"2\" y=\"2\" rx=\"2\" ry=\"2\"/><rect width=\"20\" height=\"8\" x=\"2\" y=\"14\" rx=\"2\" ry=\"2\"/><line x1=\"6\" x2=\"6.01\" y1=\"6\" y2=\"6\"/><line x1=\"6\" x2=\"6.01\" y1=\"18\" y2=\"18\"/></svg>上游机场</span><span class=\"ds-metric-reading\"><strong>3/3</strong><small>启用 · 6 节点</small></span><span class=\"ds-metric-arrow\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M5 12h14\"/><path d=\"m12 5 7 7-7 7\"/></svg></span></a>",
+      "css": ".ds-metric { display: flex; position: relative; flex-direction: column; align-items: flex-start; justify-content: center; gap: .5rem; min-width: 0; min-height: clamp(6.1rem, 4.64vw, 7.4rem); padding: .85rem 2.1rem .85rem var(--panel-pad, clamp(1rem, .82vw, 1.32rem)); border: 1px solid var(--border, #dfe5f0); border-radius: var(--panel-radius, clamp(.75rem, .6vw, .95rem)); background: var(--card, #fff); color: var(--foreground, #10192c); box-shadow: var(--panel-shadow, 0 1px 2px rgb(22 44 84 / 4%)); text-decoration: none; }\n.ds-metric:hover { border-color: var(--input, #8a97af); }\n.ds-metric:focus-visible { outline: 2px solid var(--ring, #4166cf); outline-offset: 3px; }\n.ds-metric-label { display: inline-flex; align-items: center; gap: .38rem; color: var(--muted-foreground, #54647f); font: 400 clamp(.76rem, .54vw, .86rem)/1.55 var(--font-sans, \"Segoe UI Variable Text\", \"Segoe UI\", \"PingFang SC\", \"Microsoft YaHei UI\", \"Noto Sans CJK SC\", system-ui, sans-serif); }\n.ds-metric-label svg { width: .85rem; height: .85rem; color: var(--primary, #4166eb); }\n.ds-metric-reading { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15rem .4rem; font-family: var(--font-mono, \"Cascadia Mono\", \"SFMono-Regular\", Consolas, \"Liberation Mono\", \"Microsoft YaHei UI\", monospace); line-height: 1.25; font-variant-numeric: tabular-nums; }\n.ds-metric-reading strong { font-size: clamp(1.24rem, 1.02vw, 1.65rem); font-weight: 500; letter-spacing: -.025em; }\n.ds-metric-reading small { font-size: clamp(.75rem, .56vw, .88rem); color: var(--muted-foreground, #54647f); }\n.ds-metric-arrow { display: flex; position: absolute; top: 50%; right: var(--panel-pad, clamp(1rem, .82vw, 1.32rem)); color: var(--input, #8a97af); transform: translateY(-50%); transition: transform 150ms ease-out; }\n.ds-metric-arrow svg { width: 1.05rem; height: 1.05rem; }\n.ds-metric:hover .ds-metric-arrow { color: var(--primary, #4166eb); transform: translate(.15rem, -50%); }\n@media (prefers-reduced-motion: reduce) { .ds-metric-arrow { transition-duration: .01ms; } }"
+    },
+    {
+      "name": "节点保留比例",
+      "kind": "custom",
+      "refersTo": "retention-bar",
+      "description": "展示保留节点与原始节点的数量关系。",
+      "html": "<span class=\"ds-retention\"><progress max=\"6\" value=\"4\" aria-label=\"节点保留比例\"></progress><span>4/6</span></span>",
+      "css": ".ds-retention { display: grid; grid-template-columns: minmax(2.8rem, 1fr) auto; align-items: center; gap: .65rem; color: var(--foreground, #10192c); font: 400 var(--ui-text, clamp(.875rem, .63vw, 1rem))/1.55 var(--font-mono, \"Cascadia Mono\", \"SFMono-Regular\", Consolas, \"Liberation Mono\", \"Microsoft YaHei UI\", monospace); font-variant-numeric: tabular-nums; }\n.ds-retention progress { display: block; width: 100%; height: clamp(.38rem, .3vw, .46rem); appearance: none; border: 0; border-radius: 2rem; overflow: hidden; background: var(--secondary, #eef2f7); color: var(--primary, #4166eb); }\n.ds-retention progress::-webkit-progress-bar { background: var(--secondary, #eef2f7); border-radius: 2rem; }\n.ds-retention progress::-webkit-progress-value { background: var(--primary, #4166eb); border-radius: 2rem; }\n.ds-retention progress::-moz-progress-bar { background: var(--primary, #4166eb); border-radius: 2rem; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "订阅工作台",
+    "overview": "雾蓝灰画布托起白色面板，左侧导航按任务分组。管理员可以从指标看出保留了多少节点，再进入对应页面核对来源和筛选条件。\n\n文字说明操作，等宽读数呈现版本、时间和比例。私有订阅地址显示遮挡后的路径，复制操作紧邻地址。",
+    "keyCharacteristics": [
+      "桌面分组侧栏、固定在顶部的工作栏与居中的内容区。",
+      "相邻面板共用对齐线，面板内用细线区分标题、内容与操作。",
+      "状态标签写明结果，数字与进度条一起展示节点保留比例。"
+    ],
+    "rules": [
+      {
+        "name": "The Status Label Rule",
+        "body": "每个状态标签写出具体结果，例如「可用」「更新已暂停」或「获取失败」，图标与颜色补充这段文字。",
+        "section": "colors"
+      },
+      {
+        "name": "The Numeric Alignment Rule",
+        "body": "并排比较的计数使用等宽数字，版本、节点比例和刷新时刻使用等宽字族。",
+        "section": "typography"
+      }
+    ],
+    "dos": [
+      "沿用「订阅源」「节点管理」「分流规则」作为导航名称。",
+      "在比例条旁显示保留数与总数，使进度条长度有明确含义。"
+    ],
+    "donts": [
+      "不要在概览、状态标签或提示中展示完整的私有订阅令牌。",
+      "不要用「客户端已同步」描述服务端发布成功或上游刷新成功。"
+    ]
+  }
+}

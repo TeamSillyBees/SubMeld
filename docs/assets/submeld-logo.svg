@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="116 114 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">SubMeld · 折带 S 标志</title>
+  <g fill="#0642f6">
+    <path d="M198 457 427 234h651L864 449H433v162l237 120H463L198 584Z"/>
+    <path d="M555 547h235l269 139v130L850 1018H179l181-196h459V684Z"/>
+  </g>
+  <g fill="#6b89fa">
+    <path d="m198 584 235-135v162l237 120H463Z"/>
+    <path d="m819 822 240-136v130l-94 92Z"/>
+  </g>
+</svg>

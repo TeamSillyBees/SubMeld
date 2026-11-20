@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="316" viewBox="0 0 1200 316" role="img" aria-labelledby="title desc">
+  <title id="title">SubMeld</title>
+  <desc id="desc">两片钴蓝色折带构成 S 形标志，右侧是 SubMeld 字标。</desc>
+  <style>
+    .canvas { fill: #fbfcff }
+    .wash { fill: #ebf0ff }
+    .band { fill: #d8e2ff }
+    .track { fill: none; stroke: #c5d2fa; stroke-width: 2 }
+    .ink { fill: #10192c }
+    @media (prefers-color-scheme: dark) {
+      .canvas { fill: #10192c }
+      .wash { fill: #192742 }
+      .band { fill: #24395c }
+      .track { stroke: #354e79 }
+      .ink { fill: #f4f6ff }
+    }
+  </style>
+  <rect class="canvas" width="1200" height="316"/>
+  <path class="wash" d="M0 0h219l-58 58c-24 24-46 32-81 32H0Z"/>
+  <path class="band" d="M0 0h147l-29 29c-17 17-35 24-59 24H0Z"/>
+  <path class="track" d="M0 112h81c43 0 69-10 97-38l74-74"/>
+  <path class="track" d="M927 316l66-66c25-25 52-36 89-36h118"/>
+  <path class="wash" d="M955 316l56-56c20-20 43-29 71-29h118v85Z"/>
+  <path class="band" d="M1022 316l35-35c17-17 33-23 58-23h85v58Z"/>
+  <path fill="#0642f6" d="M1094 316l17-17c14-14 27-18 47-18h42v35Z"/>
+  <g transform="translate(349 84) scale(.118)">
+    <g fill="#0642f6">
+      <path d="M198 457 427 234h651L864 449H433v162l237 120H463L198 584Z"/>
+      <path d="M555 547h235l269 139v130L850 1018H179l181-196h459V684Z"/>
+    </g>
+    <g fill="#6b89fa">
+      <path d="m198 584 235-135v162l237 120H463Z"/>
+      <path d="m819 822 240-136v130l-94 92Z"/>
+    </g>
+  </g>
+  <text class="ink" x="495" y="188" font-family="'Segoe UI', system-ui, sans-serif" font-size="86" font-weight="700"
+        letter-spacing="-4" textLength="335" lengthAdjust="spacingAndGlyphs">SubMeld</text>
+</svg>

@@ -605,6 +605,11 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
 
   return {
     state, status: profileId => workspaceSnapshot(profileId).status, sourceNodes,
+    sourceAddress(profileId, sourceId) {
+      const source = profileFor(profileId).draft.sources.find(entry => entry.id === sourceId && !entry.local)
+      if (!source) throw new UserError('未找到该订阅源。', 404)
+      return { url: source.url }
+    },
     probe, saveDraft, check, publish, rollback, tick, profileFor, activeVersion,
     claimRenewalReminders(profileId, body) {
       const timeZone = read(z.string().min(1).max(100), body.timeZone)

@@ -4,7 +4,7 @@ import { dnsPresets } from '../shared/catalog.js'
 import { networkIssues } from '../shared/config.js'
 import { useConfirm, useUnsavedChanges } from './confirm.jsx'
 import { useProject } from './project.jsx'
-import { Alert, Badge, Button, ButtonLink, Disclosure, Field, FieldGroup, FieldLegend, FieldSet, IconButton, Input, InputAction, Modal, NativeSelect, NativeSelectOption, PageTitle, Panel, SecretInput, Segmented, Textarea, Toggle, copyText, downloadJson, splitLines } from './ui.jsx'
+import { Alert, Badge, Button, ButtonLink, Disclosure, Field, FieldGroup, FieldLegend, FieldSet, IconButton, Input, InputAction, Modal, NativeSelect, NativeSelectOption, PageTitle, Panel, PrivateLinkInput, Segmented, Textarea, Toggle, copyText, downloadJson, splitLines } from './ui.jsx'
 
 function ListField({ label, hint, value, onChange, placeholder }) {
   return <Field label={label} hint={hint}><Textarea rows={3} spellCheck={false} defaultValue={value.join('\n')} onChange={event => onChange(splitLines(event.target.value))} placeholder={placeholder ? placeholder + '…' : undefined} /></Field>
@@ -296,7 +296,7 @@ export function SafetyPage() {
         actions={<Badge tone={state.hasLink ? 'success' : 'neutral'} dot>{state.hasLink ? '有效链接' : state.revoked ? '已撤销' : '尚未生成'}</Badge>}>
         <div className="panel-padding stack">
           {state.hasLink && <Field label="私有订阅链接" name="private_subscription_url" hint="持有链接的人可以下载节点连接和认证信息。请勿公开分享。">
-            <SecretInput type={link ? 'url' : 'password'} readOnly value={link || '••••••••••••••••••••••••••••'}
+            <PrivateLinkInput value={link} placeholder="••••••••••••••••••••••••••••"
               onFocus={event => { if (link) event.target.select() }} actions={<>
                 <InputAction icon={link ? EyeOff : Eye} label={link ? '遮挡私有链接' : '显示私有链接'} disabled={busy} onClick={() => link ? setLink('') : manage()} />
                 <InputAction icon={Copy} label="复制私有链接" disabled={busy} onClick={async () => {

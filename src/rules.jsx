@@ -31,7 +31,7 @@ function rulesWithService(all, serviceId, entries) {
 function ProviderFields({ value, onChange }) {
   return <>
     <Field label="远程规则集地址" hint={value.urlStored ? '原地址已遮挡。可以留空沿用，或填写新地址替换。' : '填写 YAML 或纯文本规则集文件的完整地址，服务端会下载并内嵌条目。'}>
-      <Input type="password" inputMode="url" spellCheck={false} placeholder={value.urlStored ? '••••••••••••••••' : 'https://…'} value={value.url} onChange={event => onChange({ ...value, url: event.target.value })} />
+      <Input type="url" autoCapitalize="none" spellCheck={false} placeholder={value.urlStored ? '••••••••••••••••' : 'https://…'} value={value.url} onChange={event => onChange({ ...value, url: event.target.value })} />
     </Field>
     <FieldGroup className="form-grid three">
       <Field label="内容类型"><NativeSelect value={value.behavior} onChange={event => onChange({ ...value, behavior: event.target.value })}>

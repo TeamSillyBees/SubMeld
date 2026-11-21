@@ -136,6 +136,7 @@ export function createApplication(options = {}) {
         case 'POST /api/password': result = auth.change(response, body); break
         case 'GET /api/state': result = workspace.state(profile, address.searchParams.get('nodes') !== '0'); break
         case 'GET /api/status': result = workspace.status(profile); break
+        case 'GET /api/source-address': result = workspace.sourceAddress(profile, address.searchParams.get('id')); break
         case 'GET /api/source-nodes': result = workspace.sourceNodes(profile, address.searchParams.get('id')); break
         case 'POST /api/draft': result = await workspace.saveDraft(profile, owner, body); break
         case 'POST /api/probe': result = await workspace.probe(profile, owner, body); break

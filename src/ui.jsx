@@ -190,9 +190,9 @@ export function SearchBox({ value, onChange, placeholder = '搜索', label, name
   </InputGroup>
 }
 
-export function SecretInput({ type = 'password', actions, ...props }) {
+export function PrivateLinkInput({ actions, ...props }) {
   return <InputGroup>
-    <InputGroupInput type={type} autoComplete="off" spellCheck={false} {...props} />
+    <InputGroupInput type="url" readOnly autoComplete="off" spellCheck={false} {...props} />
     {actions && <InputGroupAddon align="inline-end">{actions}</InputGroupAddon>}
   </InputGroup>
 }

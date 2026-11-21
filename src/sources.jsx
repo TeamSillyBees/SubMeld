@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, ChevronRight, Download, Eye, EyeOff, Filter, ListFilter, Network, Pencil, Plus, Radio, RefreshCw, RotateCcw, Star, Trash2, Upload, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, ChevronRight, Download, Filter, ListFilter, Network, Pencil, Plus, Radio, RefreshCw, RotateCcw, Star, Trash2, Upload, X } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
@@ -9,7 +9,7 @@ import { membersForSources } from '../shared/group-filter.js'
 import { calendarFormatter, renewalNoticeDays } from '../shared/subscription.js'
 import { useConfirm, useUnsavedChanges } from './confirm.jsx'
 import { useProject, useSearchValue } from './project.jsx'
-import { Alert, Badge, Button, ButtonLink, Checkbox, Disclosure, Empty, Field, FieldGroup, FieldLegend, FieldSet, IconButton, Input, InputAction, Modal, MoveButtons, MultiSelect, NativeSelect, NativeSelectOption, PageCheckbox, Pager, Panel, RouteLink, Schedule, SearchBox, SecretInput, Segmented, SourceStatus, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea, TimeLabel, Toggle, downloadJson, dragProps, formatNumber, formatTime, moveAt, newId, searchable, useListPage, usePage } from './ui.jsx'
+import { Alert, Badge, Button, ButtonLink, Checkbox, Disclosure, Empty, Field, FieldGroup, FieldLegend, FieldSet, IconButton, Input, Modal, MoveButtons, MultiSelect, NativeSelect, NativeSelectOption, PageCheckbox, Pager, Panel, RouteLink, SearchBox, Segmented, SourceStatus, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea, TimeLabel, Toggle, downloadJson, dragProps, formatNumber, moveAt, newId, searchable, useListPage, usePage } from './ui.jsx'
 
 const regionOptions = regions.map(([id, name, flag]) => [id, [flag, name].filter(Boolean).join(' ')])
 const countText = (retained, original) => formatNumber(retained) + ' / ' + formatNumber(original)
@@ -68,7 +68,8 @@ function SourceEditor({ source, first, onClose }) {
   const [form, setForm] = useState(() => structuredClone(initial))
   const [step, setStep] = useState(first === 'filter' && source ? 'filter' : 'settings')
   const [advanced, setAdvanced] = useState(false)
-  const [expose, setExpose] = useState(false)
+  const [savedAddress, setSavedAddress] = useState(null)
+  const [addressUnavailable, setAddressUnavailable] = useState(false)
   const [sample, setSample] = useState(null)
   const [testedUrl, setTestedUrl] = useState(null)
   const [busy, setBusy] = useState('')
@@ -76,17 +77,34 @@ function SourceEditor({ source, first, onClose }) {
   const [previewFilter, setPreviewFilter] = useState('all')
   const [previewQuery, setPreviewQuery] = useState('')
   const [templateName, setTemplateName] = useState('')
-  const dirty = JSON.stringify(form) !== JSON.stringify(initial)
+  const readingAddress = Boolean(initial.urlStored && !initial.local && savedAddress === null && !addressUnavailable)
+  const address = form.url.trim()
+  const urlOverride = form.urlStored && address === savedAddress ? '' : address
+  const dirty = JSON.stringify({ ...form, url: urlOverride }) !== JSON.stringify(initial)
   const guard = useUnsavedChanges(dirty, '本次填写的订阅源设置将被丢弃。')
   const record = state.sources[form.id]
   const current = draftDataset(record)
-  const testResult = testedUrl === form.url ? sample : null
-  const data = form.local || (form.urlStored && !form.url.trim()) ? current ?? testResult : testResult?.savedData ?? testResult
+  const testResult = testedUrl === urlOverride ? sample : null
+  const data = form.local || (form.urlStored && !urlOverride) ? current ?? testResult : testResult?.savedData ?? testResult
   const rows = useMemo(() => filterNodes(form, data), [form, data])
   const previewRows = rows.filter(row => (previewFilter === 'all' || row.kept === (previewFilter === 'kept'))
     && (searchable(row.name, previewQuery) || searchable(row.originalName, previewQuery)))
   const [offset, setOffset] = usePage(previewRows.length, 20)
   const filtering = step === 'filter'
+
+  useEffect(() => {
+    if (!readingAddress || step !== 'settings') return
+    let active = true
+    call('source-address?id=' + encodeURIComponent(initial.id)).then(({ url }) => {
+      if (!active) return
+      setSavedAddress(url)
+      setForm(previous => ({ ...previous, url }))
+    }, () => {
+      if (active) setAddressUnavailable(true)
+    })
+    return () => { active = false }
+  }, [call, initial.id, readingAddress, step])
+
   const change = (key, value) => {
     setForm(previous => ({ ...previous, [key]: value }))
     if (problem?.field === key) setProblem(null)
@@ -102,11 +120,10 @@ function SourceEditor({ source, first, onClose }) {
 
   function validateAddress() {
     if (form.local) return true
-    const address = form.url.trim()
-    if (form.urlStored && !address) return true
-    if (!address) { fieldProblem('url', '请输入订阅地址。'); return false }
+    if (form.urlStored && !urlOverride) return true
+    if (!urlOverride) { fieldProblem('url', '请输入订阅地址。'); return false }
     try {
-      const url = new URL(address)
+      const url = new URL(urlOverride)
       if (url.username || url.password) {
         fieldProblem('url', '请移除地址中的用户名和密码。')
         return false
@@ -143,14 +160,14 @@ function SourceEditor({ source, first, onClose }) {
     if (advance && testResult?.nodes.length) { showStep('filter'); return }
     setBusy('test')
     try {
-      const result = await call('probe', { kind: 'source', id: form.id, url: form.url.trim() })
+      const result = await call('probe', { kind: 'source', id: form.id, url: urlOverride })
       setSample(result)
-      setTestedUrl(form.url)
+      setTestedUrl(urlOverride)
       if (advance) showStep('filter')
     } catch (error) {
       setProblem(error)
       setSample(error.detail?.rejected ? error.detail : null)
-      setTestedUrl(form.url)
+      setTestedUrl(urlOverride)
     } finally { setBusy('') }
   }
 
@@ -159,7 +176,7 @@ function SourceEditor({ source, first, onClose }) {
     if (!validateSettings()) return
     setBusy('save')
     try {
-      const value = { ...form, url: form.url.trim(), name: form.name.trim(), renewalDate: form.renewalDate || undefined }
+      const value = { ...form, url: urlOverride, name: form.name.trim(), renewalDate: form.renewalDate || undefined }
       await save({ ...state.draft, sources: source ? state.draft.sources.map(entry => entry.id === form.id ? value : entry) : [...state.draft.sources, value] }, revision)
       guard.leave(onClose)
     } catch (error) { setProblem(error) } finally { setBusy('') }
@@ -230,11 +247,10 @@ function SourceEditor({ source, first, onClose }) {
           <Field label="订阅源名称" name="source_name" error={problem?.field === 'name' ? problem.message : undefined}><Input placeholder="例如主订阅" maxLength={256} value={form.name} onChange={event => change('name', event.target.value)} /></Field>
           <Field label="节点名称前缀（可选）" hint="加在节点原名之前。"><Input maxLength={256} placeholder="[A] " value={form.tag} onChange={event => change('tag', event.target.value)} /></Field>
         </FieldGroup>
-        {!form.local && <Field label="订阅地址" name="subscription_url" error={problem?.field === 'url' ? problem.message : undefined}
-          hint={form.urlStored ? '留空沿用已保存的订阅地址。' : undefined}>
-          <SecretInput type={expose ? 'text' : 'password'} inputMode="url" maxLength={8192} placeholder={form.urlStored ? '••••••••••••••••' : 'https://…'}
-            value={form.url} onChange={event => change('url', event.target.value)}
-            actions={<InputAction icon={expose ? EyeOff : Eye} label={expose ? '遮挡输入的地址' : '显示输入的地址'} onClick={() => setExpose(!expose)} />} />
+        {!form.local && <Field label="订阅地址" name="subscription_url" disabled={readingAddress} error={problem?.field === 'url' ? problem.message : undefined}
+          hint={addressUnavailable ? '无法读取已保存的地址。留空沿用原地址。' : form.urlStored ? '留空沿用已保存的订阅地址。' : undefined}>
+          <Input type="url" spellCheck={false} autoCapitalize="none" maxLength={8192} placeholder={readingAddress ? '正在读取订阅地址…' : 'https://…'}
+            value={form.url} onChange={event => change('url', event.target.value)} />
         </Field>}
         {source && !form.local && <div className="actions">
           <Button icon={RefreshCw} size="small" busy={busy === 'test'} onClick={() => testLink()}>测试订阅</Button>
@@ -322,39 +338,45 @@ function remainingTraffic(info, empty) {
 }
 
 function SubscriptionFacts({ source, record }) {
-  if (source.local && !source.renewalDate) return null
   const info = record?.subscriptionInfo
   const empty = info || record?.lastSuccess ? '上游未提供' : '暂无数据'
   const expiresOn = info?.expire > 0 ? billingCalendar.format(info.expire * 1000) : null
-  return <dl className="subscription-facts" aria-label="流量与续费">
+  return <dl className="subscription-facts" aria-label={source.local ? '本地来源信息' : '流量与续费'}>
     {!source.local && <>
       <div><dt>剩余流量</dt><dd>{remainingTraffic(info, empty)}</dd></div>
       <div><dt>订阅到期日</dt><dd>{expiresOn ? <time dateTime={expiresOn}>{expiresOn}</time> : info?.expire === 0 ? '长期有效' : empty}</dd></div>
     </>}
-    <div><dt>续费日期</dt><dd><RouteLink page="sources" id={source.id} detail="renewal">
+    {(!source.local || source.renewalDate) && <div><dt>续费日期</dt><dd><RouteLink page="sources" id={source.id} detail="renewal">
       {source.renewalDate ? <time dateTime={source.renewalDate}>{source.renewalDate}</time> : '设置日期'}
       <span className="sr-only">，编辑{source.name}的续费日期</span>
-    </RouteLink></dd></div>
-    {!source.local && <div><dt>数据更新时间</dt><dd><TimeLabel value={info?.updatedAt} /></dd></div>}
+    </RouteLink></dd></div>}
+    <div><dt>{source.local ? '导入时间' : '数据更新时间'}</dt><dd><TimeLabel value={info?.updatedAt ?? record?.lastSuccess} /></dd></div>
   </dl>
 }
 
 function SourceCard({ source, record, stats, index, total, checked, onCheck, move, refresh, editMany, remove, busy }) {
   const { navigate } = useProject()
   const confirm = useConfirm()
-  const example = draftDataset(record)?.nodes?.[0]?.name
-  const retainedShare = stats.original ? Math.round(stats.retained / stats.original * 100) : null
   async function changeEnabled(enabled) {
     if (enabled || await confirm({ title: '停用此订阅源？', detail: '下一次发布将排除此订阅源的节点。', action: '停用订阅源' })) editMany([source.id], { enabled })
   }
   return <article className="source-card" aria-label={source.name} data-sort-row {...dragProps(index, move, 'source')}>
     <header className="source-card-head">
-      <div className="source-card-identity">
-        <Checkbox aria-label={'选择订阅源 ' + source.name} checked={checked} onCheckedChange={onCheck} />
-        <h2><RouteLink page="sources" id={source.id}>{source.name}</RouteLink></h2>
-        {source.tag && <code className="tech-chip">{source.tag}</code>}
-        <SourceStatus entry={source} record={record} />
-        <span className="soft-count">保留 {countText(stats.retained, stats.original)}</span>
+      <div className="source-card-heading">
+        <div className="source-card-identity">
+          <Checkbox aria-label={'选择订阅源 ' + source.name} checked={checked} onCheckedChange={onCheck} />
+          <h2><RouteLink page="sources" id={source.id}>{source.name}</RouteLink></h2>
+          {source.tag && <code className="tech-chip" title="节点名称前缀">{source.tag}</code>}
+          <SourceStatus entry={source} record={record} />
+          <RouteLink className="soft-count" page="nodes" id={source.id}>保留 {countText(stats.retained, stats.original)}</RouteLink>
+        </div>
+        <div className="source-card-actions" inert={Boolean(busy)}>
+          <ButtonLink icon={Pencil} size="small" variant="ghost" page="sources" id={source.id}>{source.local ? '编辑本地来源' : '编辑订阅源设置'}</ButtonLink>
+          <div className="row-actions">
+            <MoveButtons index={index} count={total} onMove={move} area="source" />
+            <IconButton icon={Trash2} className="delete-action" label={'删除 ' + source.name} onClick={() => remove([source.id])} />
+          </div>
+        </div>
       </div>
       <div className="source-card-tools" inert={Boolean(busy)}>
         <label className="inline-switch"><Switch checked={source.enabled} onCheckedChange={changeEnabled} />参与整合</label>
@@ -365,27 +387,10 @@ function SourceCard({ source, record, stats, index, total, checked, onCheck, mov
     </header>
     <div className="source-card-body">
       <SubscriptionFacts source={source} record={record} />
-      <div className="tag-mapping">
-        <div className="between"><h3>节点名称前缀</h3><Button size="small" icon={Pencil} variant="ghost" onClick={() => navigate('sources', source.id)}>编辑前缀</Button></div>
-        <div className="tag-values"><code>{source.tag || '未设置前缀'}</code>
-          {example && <div className="tag-example"><span>{example}</span><ArrowRight aria-hidden="true" /><strong>{source.tag}{example}</strong></div>}
-        </div>
-      </div>
-      <div className="source-metrics">
-        <section><h3>{source.local ? '本地导入' : '最近拉取'}</h3>{source.local ? <span>{formatTime(record?.lastSuccess)}</span> : <Schedule record={record} />}</section>
-        <section><div className="between"><h3>节点保留</h3><RouteLink className="numeric" page="nodes" id={source.id}>{countText(stats.retained, stats.original)}</RouteLink></div>
-          <progress className="retention-bar" aria-label={source.name + ' 节点保留比例'} max={stats.original || 1} value={stats.retained} />
-          <p className="metric-foot"><span>排除 {formatNumber(stats.excluded)}{stats.unsupported > 0 && ' · 无法导入 ' + formatNumber(stats.unsupported)}</span><span>{retainedShare == null ? '暂无数据' : retainedShare + '%'}</span></p>
-        </section>
-      </div>
       {record?.error && <Alert tone="warning">{record.error}</Alert>}
       {record?.pending && <Alert tone="warning" title={record.pending.accepted ? '已采纳候选节点' : '有待确认的候选节点'}
         action={<Button size="small" onClick={() => navigate('sources', source.id, 'filter')}>查看候选</Button>}>{record.pending.reason}</Alert>}
     </div>
-    <footer className="source-card-footer">
-      <ButtonLink icon={Pencil} size="small" variant="ghost" page="sources" id={source.id}>{source.local ? '编辑本地来源' : '编辑订阅源设置'}</ButtonLink>
-      <div className="row-actions"><MoveButtons index={index} count={total} onMove={move} area="source" /><IconButton icon={Trash2} className="delete-action" label={'删除 ' + source.name} onClick={() => remove([source.id])} /></div>
-    </footer>
   </article>
 }
 

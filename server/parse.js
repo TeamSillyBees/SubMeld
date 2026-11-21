@@ -181,9 +181,8 @@ function tlsTransport(node, params, force = false) {
 
 function parseSS(value) {
   const hash = value.indexOf('#')
-  if (hash < 0) throw new UserError('分享链接未提供原始节点名。')
-  const name = decode(value.slice(hash + 1))
-  let address = value.slice(5, hash)
+  const name = hash < 0 ? '' : decode(value.slice(hash + 1))
+  let address = value.slice(5, hash < 0 ? undefined : hash)
   if (!address.includes('@')) address = base64(address)
   const separator = address.lastIndexOf('@')
   if (separator < 0) throw new UserError('Shadowsocks 分享链接格式无效。')
@@ -211,6 +210,24 @@ function parseSS(value) {
   return node
 }
 
+const endpointName = (server, port) => (server.includes(':') && !server.startsWith('[') ? '[' + server + ']' : server) + ':' + port
+
+function parseSSR(value) {
+  const [endpoint, query] = base64(value.slice(6)).split('/?')
+  const parts = /^(.+):(\d+):([^:]+):([^:]+):([^:]+):([a-z0-9_+=-]+)\/?$/i.exec(endpoint)
+  if (!parts) throw new UserError('ShadowsocksR 分享链接格式无效。')
+  const [, host, port, protocol, cipher, obfs, password] = parts
+  const params = new URLSearchParams(query)
+  const node = {
+    name: params.get('remarks') ? base64(params.get('remarks')) : endpointName(host, port),
+    type: 'ssr', server: host.replace(/^\[|\]$/g, ''), port: Number(port),
+    protocol, cipher, obfs, password: base64(password), udp: true,
+  }
+  if (params.get('protoparam')) node['protocol-param'] = base64(params.get('protoparam'))
+  if (params.get('obfsparam')) node['obfs-param'] = base64(params.get('obfsparam'))
+  return node
+}
+
 function parseVMess(value) {
   const json = JSON.parse(base64(value.slice(8)))
   const node = {
@@ -230,6 +247,7 @@ function parseVMess(value) {
 
 function uriNode(value) {
   if (value.startsWith('ss://')) return parseSS(value)
+  if (value.startsWith('ssr://')) return parseSSR(value)
   if (value.startsWith('vmess://')) return parseVMess(value)
   const uri = new URL(value)
   const scheme = uri.protocol.slice(0, -1)
@@ -267,30 +285,39 @@ function stable(value) {
 }
 export const compareDigest = value => digest(JSON.stringify(stable(value)))
 
-export function parseSource(bytes, urls) {
-  const text = asText(bytes).trim()
+export function parseSource(bytes, urls, inputFormat) {
+  const content = asText(bytes)
+  let text = content.trim()
   if (!text) throw new UserError('订阅返回空内容。')
   let entries
   let providers = []
   let format = 'Mihomo YAML'
-  if (/^[a-z0-9-]+:\/\//i.test(text)) {
-    entries = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
-    format = '节点分享链接'
-  } else {
-    let decoded
-    try { decoded = base64(text) } catch { /* YAML can be tested independently. */ }
-    if (decoded && /^[a-z0-9-]+:\/\//im.test(decoded)) {
-      entries = decoded.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
-      format = 'Base64 分享链接'
-    } else {
-      if (/^</.test(text)) throw new UserError('上游返回网页而非订阅数据，请检查链接是否已过期。')
-      const config = safeYaml(text)
-      entries = Array.isArray(config) ? config : config?.proxies
-      providers = Object.keys(config?.['proxy-providers'] ?? {})
-      if (!Array.isArray(entries)) {
-        throw new UserError(providers.length ? '订阅仅提供外部代理集合，当前需要直接包含节点的订阅。' : '无法识别订阅格式，请选择 Mihomo/Clash YAML 或节点分享链接。')
+  if (inputFormat !== 'yaml') {
+    const linkLine = /^[ \t]*[a-z0-9-]+:\/\//im
+    const plainLinks = inputFormat === 'links' ? linkLine.test(text) : /^[a-z0-9-]+:\/\//i.test(text)
+    if (plainLinks) format = '节点分享链接'
+    else {
+      let decoded
+      try { decoded = base64(text) } catch { /* The original text may be YAML. */ }
+      if (decoded && linkLine.test(decoded)) {
+        text = decoded
+        format = 'Base64 分享链接'
+      } else if (inputFormat === 'links') {
+        throw new UserError('请粘贴每行一条的节点分享链接，或 Base64 编码的分享链接列表。')
       }
     }
+  }
+  if (format === 'Mihomo YAML') {
+    if (!inputFormat && /^</.test(text)) throw new UserError('上游返回网页而非订阅数据，请检查链接是否已过期。')
+    const config = safeYaml(content)
+    entries = Array.isArray(config) ? config : config?.proxies
+    providers = Object.keys(config?.['proxy-providers'] ?? {})
+    if (!Array.isArray(entries)) {
+      if (providers.length) throw new UserError('订阅仅提供外部代理集合，当前需要直接包含节点的订阅。')
+      throw new UserError(inputFormat === 'yaml' ? 'YAML 配置需要包含 proxies 节点列表，或使用节点数组。' : '无法识别订阅格式，请选择 Mihomo/Clash YAML 或节点分享链接。')
+    }
+  } else {
+    entries = text.split(/\r\n?|\n/).map(line => line.trim()).filter(Boolean)
   }
   if (entries.length > MAX_NODES) throw new UserError('单个订阅源最多支持 16,000 个节点。')
   const nodes = []
@@ -299,7 +326,11 @@ export function parseSource(bytes, urls) {
   const counts = new Map()
   for (const [index, entry] of entries.entries()) {
     try {
-      const node = connectionFrom(typeof entry === 'string' && format !== 'Mihomo YAML' ? uriNode(entry) : entry)
+      const raw = format === 'Mihomo YAML' ? entry : uriNode(entry)
+      if (inputFormat === 'links' && (raw.name == null || raw.name === '') && typeof raw.server === 'string') {
+        raw.name = endpointName(raw.server, raw.port)
+      }
+      const node = connectionFrom(raw)
       const fingerprint = compareDigest(node.connection)
       const key = digest(node.name).slice(0, 32)
       const record = { name: node.name, type: node.type, region: identifyRegion(node.name), connection: node.connection, fingerprint, key }

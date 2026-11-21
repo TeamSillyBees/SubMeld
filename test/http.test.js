@@ -76,7 +76,9 @@ test('authentication, isolated source drafts, scheduled publishing, failure reco
   const expire = Math.floor(Date.now() / 1000) + 4 * 86400
   const expiryDate = new Date(expire * 1000).toISOString().slice(0, 10)
   let usage = 'total=1024; upload=100; download=200; expire=' + expire
+  let upstreamRequests = 0
   const upstream = createServer((request, response) => {
+    upstreamRequests++
     if (request.url.startsWith('/provider')) return response.end('payload:\n  - "+.example.net"\n')
     if (request.url.startsWith('/a')) response.statusCode = aStatus
     if (response.statusCode !== 200) return response.end('Credentials must not be surfaced: ' + token)
@@ -123,6 +125,43 @@ test('authentication, isolated source drafts, scheduled publishing, failure reco
   }))
   sources[2].filter.keep = ['HK']
   sources[2].filter.keywords = ['免费', '试用']
+  await t.test('local text imports preview without fetching and save valid nodes atomically', async t => {
+    const local = await call('profiles', { action: 'create', title: 'Local imports' })
+    const scoped = (path, body, expected) => call(path + '?profile=' + local.id, body, expected)
+    t.after(() => scoped('profiles', { action: 'delete' }))
+    const [yamlSource, linkSource] = sources.slice(0, 2).map(source => ({ ...source, local: true, url: '' }))
+    const draft = { ...local.draft, sources: [yamlSource, linkSource] }
+    const yaml = { format: 'yaml', text: stringify({ proxies: [proxy('本地', 443)] }) }
+    const credentials = Buffer.from('aes-128-gcm:test-share-password').toString('base64url')
+    const link = 'ss://' + credentials + '@edge.example.net:445#Tokyo'
+    const links = { format: 'links', text: link + '\n' + upstreamUrl + '/invalid-node' }
+    const preview = await scoped('probe', { kind: 'source', id: linkSource.id, input: links })
+    assert.deepEqual(preview.nodes.map(node => node.name), ['Tokyo'])
+    assert.equal(preview.rejected.length, 1)
+    assert.ok(!JSON.stringify(preview).includes('test-share-password'))
+    const save = (input, revision = local.revision) => ({
+      revision, draft, localInputs: { [yamlSource.id]: yaml, [linkSource.id]: input },
+    })
+    const partial = await scoped('draft', save(links), 422)
+    assert.deepEqual(partial.detail, preview)
+    await scoped('draft', save({ format: 'links', text: 'ssr://!!!', acceptPartial: true }), 422)
+    const unchanged = await scoped('state')
+    assert.equal(unchanged.revision, local.revision)
+    assert.deepEqual(unchanged.sources, {})
+    const confirmed = { ...links, acceptPartial: true }
+    const saved = await scoped('draft', save(confirmed))
+    await scoped('draft', save(confirmed), 409)
+    assert.deepEqual(saved.sources[linkSource.id].good, preview)
+    assert.equal(saved.sources[yamlSource.id].next, null)
+    assert.ok(!JSON.stringify(saved).includes('test-node-password'))
+    await scoped('refresh', { id: linkSource.id }, 404)
+    await scoped('publish', { revision: saved.revision })
+    const config = parse(await (await fetch((await scoped('link')).url)).text())
+    assert.deepEqual(config.proxies.map(node => [node.name, node.password]), [
+      ['[A] 本地', 'test-node-password'], ['[B] Tokyo', 'test-share-password'],
+    ])
+    assert.equal(upstreamRequests, 0)
+  })
   for (const [index, source] of sources.entries()) {
     const result = await call('probe', { id: source.id, url: source.url, kind: 'source' })
     assert.equal(result.nodes.length, [a, b, c][index].length)

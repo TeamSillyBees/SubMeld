@@ -12,6 +12,7 @@ import { useProject, useSearchValue } from './project.jsx'
 import { Alert, Badge, Button, ButtonLink, Checkbox, Disclosure, Empty, Field, FieldGroup, FieldLegend, FieldSet, IconButton, Input, Modal, MoveButtons, MultiSelect, NativeSelect, NativeSelectOption, PageCheckbox, Pager, Panel, RouteLink, SearchBox, Segmented, SourceStatus, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, Textarea, TimeLabel, Toggle, downloadJson, dragProps, formatNumber, moveAt, newId, searchable, useListPage, usePage } from './ui.jsx'
 
 const regionOptions = regions.map(([id, name, flag]) => [id, [flag, name].filter(Boolean).join(' ')])
+const importModes = [['url', '订阅链接'], ['yaml', 'YAML 配置'], ['links', '节点链接']]
 const countText = (retained, original) => formatNumber(retained) + ' / ' + formatNumber(original)
 const newSource = () => ({
   id: newId(), name: '', tag: '', url: '', enabled: true, paused: false, minutes: 60, filter: structuredClone(defaultFilter),
@@ -63,15 +64,17 @@ function SourceEditor({ source, first, onClose }) {
   const revision = useRef(state.revision).current
   const formId = useId()
   const settingsForm = useRef(null)
+  const yamlFile = useRef(null)
   const renewalInput = useRef(null)
   const stepHeading = useRef(null)
   const [form, setForm] = useState(() => structuredClone(initial))
   const [step, setStep] = useState(first === 'filter' && source ? 'filter' : 'settings')
   const [advanced, setAdvanced] = useState(false)
+  const [inputMode, setInputMode] = useState('url')
+  const [localTexts, setLocalTexts] = useState({ yaml: '', links: '' })
   const [savedAddress, setSavedAddress] = useState(null)
   const [addressUnavailable, setAddressUnavailable] = useState(false)
-  const [sample, setSample] = useState(null)
-  const [testedUrl, setTestedUrl] = useState(null)
+  const [testResult, setTestResult] = useState(null)
   const [busy, setBusy] = useState('')
   const [problem, setProblem] = useState(null)
   const [previewFilter, setPreviewFilter] = useState('all')
@@ -80,11 +83,12 @@ function SourceEditor({ source, first, onClose }) {
   const readingAddress = Boolean(initial.urlStored && !initial.local && savedAddress === null && !addressUnavailable)
   const address = form.url.trim()
   const urlOverride = form.urlStored && address === savedAddress ? '' : address
-  const dirty = JSON.stringify({ ...form, url: urlOverride }) !== JSON.stringify(initial)
+  const localInput = !source && inputMode !== 'url' ? { format: inputMode, text: localTexts[inputMode] } : null
+  const local = form.local || Boolean(localInput)
+  const dirty = Boolean(localTexts.yaml || localTexts.links) || JSON.stringify({ ...form, url: urlOverride }) !== JSON.stringify(initial)
   const guard = useUnsavedChanges(dirty, '本次填写的订阅源设置将被丢弃。')
   const record = state.sources[form.id]
   const current = draftDataset(record)
-  const testResult = testedUrl === urlOverride ? sample : null
   const data = form.local || (form.urlStored && !urlOverride) ? current ?? testResult : testResult?.savedData ?? testResult
   const rows = useMemo(() => filterNodes(form, data), [form, data])
   const previewRows = rows.filter(row => (previewFilter === 'all' || row.kept === (previewFilter === 'kept'))
@@ -108,7 +112,27 @@ function SourceEditor({ source, first, onClose }) {
   const change = (key, value) => {
     setForm(previous => ({ ...previous, [key]: value }))
     if (problem?.field === key) setProblem(null)
-    if (key === 'url') { setProblem(null); setSample(null) }
+    if (key === 'url') { setProblem(null); setTestResult(null) }
+  }
+  function changeMode(mode) {
+    setInputMode(mode)
+    setTestResult(null)
+    setProblem(null)
+  }
+  function changeText(text) {
+    setLocalTexts(previous => ({ ...previous, [inputMode]: text }))
+    setTestResult(null)
+    setProblem(null)
+  }
+  async function readYamlFile(event) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (file.size > 8 * 1024 * 1024) { fieldProblem('content', '文件过大，请选择 8 MiB 以内的 YAML 文件。'); return }
+    setBusy('file')
+    try {
+      changeText(new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer()))
+    } catch { fieldProblem('content', '无法读取文件，请选择 UTF-8 编码的 YAML 文件。') } finally { setBusy('') }
   }
   const stop = () => { if (!busy) return guard.close(onClose) }
   function fieldProblem(key, message) {
@@ -118,7 +142,12 @@ function SourceEditor({ source, first, onClose }) {
     requestAnimationFrame(() => settingsForm.current?.querySelector('[aria-invalid="true"]')?.focus())
   }
 
-  function validateAddress() {
+  function validateInput() {
+    if (localInput) {
+      if (localInput.text.trim()) return true
+      fieldProblem('content', inputMode === 'yaml' ? '请粘贴 YAML 配置或选择文件。' : '请粘贴节点分享链接。')
+      return false
+    }
     if (form.local) return true
     if (form.urlStored && !urlOverride) return true
     if (!urlOverride) { fieldProblem('url', '请输入订阅地址。'); return false }
@@ -135,14 +164,14 @@ function SourceEditor({ source, first, onClose }) {
   }
 
   function validateSettings() {
-    if (!validateAddress()) return false
+    if (!validateInput()) return false
     if (!form.name.trim()) { fieldProblem('name', '请填写订阅源名称。'); return false }
     const dateInput = renewalInput.current
     if (dateInput && !dateInput.validity.valid) {
       fieldProblem('renewalDate', '请填写完整的续费日期，或清空日期。')
       return false
     }
-    if (!Number.isInteger(form.minutes) || form.minutes < 1 || form.minutes > 43200) {
+    if (!local && (!Number.isInteger(form.minutes) || form.minutes < 1 || form.minutes > 43200)) {
       fieldProblem('minutes', '请输入 1–43,200 分钟之间的整数。')
       return false
     }
@@ -154,21 +183,28 @@ function SourceEditor({ source, first, onClose }) {
     requestAnimationFrame(() => stepHeading.current?.focus())
   }
 
-  async function testLink(advance = false) {
+  function inputError(error) {
+    const result = error.detail?.rejected ? error.detail : null
+    if (result) setTestResult(result)
+    if (localInput && [400, 413, 422].includes(error.status) && (!error.detail || result)) {
+      if (result?.nodes.length) showStep('filter')
+      else fieldProblem('content', error.message)
+    } else {
+      setProblem(error)
+    }
+  }
+
+  async function previewInput(advance = false) {
     setProblem(null)
-    if (advance ? !validateSettings() : !validateAddress()) return
+    if (advance ? !validateSettings() : !validateInput()) return
     if (advance && testResult?.nodes.length) { showStep('filter'); return }
+    setTestResult(null)
     setBusy('test')
     try {
-      const result = await call('probe', { kind: 'source', id: form.id, url: urlOverride })
-      setSample(result)
-      setTestedUrl(urlOverride)
+      const result = await call('probe', { kind: 'source', id: form.id, ...(localInput ? { input: localInput } : { url: urlOverride }) })
+      setTestResult(result)
       if (advance) showStep('filter')
-    } catch (error) {
-      setProblem(error)
-      setSample(error.detail?.rejected ? error.detail : null)
-      setTestedUrl(urlOverride)
-    } finally { setBusy('') }
+    } catch (error) { inputError(error) } finally { setBusy('') }
   }
 
   async function commit() {
@@ -177,9 +213,12 @@ function SourceEditor({ source, first, onClose }) {
     setBusy('save')
     try {
       const value = { ...form, url: urlOverride, name: form.name.trim(), renewalDate: form.renewalDate || undefined }
-      await save({ ...state.draft, sources: source ? state.draft.sources.map(entry => entry.id === form.id ? value : entry) : [...state.draft.sources, value] }, revision)
+      if (localInput) Object.assign(value, { local: true, url: '', enabled: true, paused: true, minutes: initial.minutes })
+      const sources = source ? state.draft.sources.map(entry => entry.id === form.id ? value : entry) : [...state.draft.sources, value]
+      const localInputs = localInput ? { [form.id]: { ...localInput, acceptPartial: filtering } } : undefined
+      await save({ ...state.draft, sources }, revision, undefined, localInputs)
       guard.leave(onClose)
-    } catch (error) { setProblem(error) } finally { setBusy('') }
+    } catch (error) { inputError(error) } finally { setBusy('') }
   }
 
   async function storeFilter() {
@@ -200,16 +239,16 @@ function SourceEditor({ source, first, onClose }) {
   const changeCount = retained - currentCount
   const toggleManual = id => change('filter', { ...form.filter, manual: form.filter.manual.includes(id) ? form.filter.manual.filter(key => key !== id) : [...form.filter.manual, id] })
   const steps = [['settings', '订阅设置'], ['filter', '筛选与预览']]
+  const previewAction = localInput ? '解析并预览' : '测试并预览'
   return <Modal wide={filtering} className={!filtering ? 'source-settings-dialog' : undefined} title={source ? '编辑订阅源 · ' + source.name : '添加订阅源'}
     initialFocusRef={first === 'renewal' ? renewalInput : undefined}
-    detail={!source && !filtering ? '填写订阅源名称与上游订阅地址，可在保存前预览节点。' : undefined}
     onClose={stop} footer={<>
       <Button variant="ghost" disabled={Boolean(busy)} onClick={stop}>取消</Button>
       {!source && filtering && <Button icon={ArrowLeft} disabled={Boolean(busy)} onClick={() => showStep('settings')}>返回设置</Button>}
       {!source && !filtering ? <>
         <Button variant="ghost" busy={busy === 'save'} disabled={Boolean(busy)} onClick={commit}>直接保存</Button>
         <Button variant="primary" icon={ArrowRight} type="submit" form={formId} busy={busy === 'test'} disabled={Boolean(busy)}>
-          {busy === 'test' ? '正在测试…' : testResult?.nodes.length ? '预览筛选结果' : '测试并预览'}
+          {busy === 'test' ? '正在读取节点…' : testResult?.nodes.length ? '预览筛选结果' : previewAction}
         </Button>
       </> : <Button variant="primary" icon={Check} busy={busy === 'save'} disabled={Boolean(busy)} onClick={commit}>保存订阅源</Button>}
     </>}>
@@ -240,29 +279,46 @@ function SourceEditor({ source, first, onClose }) {
       {!filtering && <form className="stack" id={formId} ref={settingsForm} noValidate inert={Boolean(busy)} onSubmit={event => {
         event.preventDefault()
         if (source) void commit()
-        else void testLink(true)
+        else void previewInput(true)
       }}>
         <h2 className="sr-only" tabIndex={-1} ref={stepHeading}>订阅设置</h2>
         <FieldGroup className="form-grid">
           <Field label="订阅源名称" name="source_name" error={problem?.field === 'name' ? problem.message : undefined}><Input placeholder="例如主订阅" maxLength={256} value={form.name} onChange={event => change('name', event.target.value)} /></Field>
           <Field label="节点名称前缀（可选）" hint="加在节点原名之前。"><Input maxLength={256} placeholder="[A] " value={form.tag} onChange={event => change('tag', event.target.value)} /></Field>
         </FieldGroup>
-        {!form.local && <Field label="订阅地址" name="subscription_url" disabled={readingAddress} error={problem?.field === 'url' ? problem.message : undefined}
+        {!source && <FieldSet className="source-import-mode">
+          <FieldLegend variant="label">导入方式</FieldLegend>
+          <Segmented label="导入方式" items={importModes} value={inputMode} onChange={changeMode} />
+        </FieldSet>}
+        {!local && <Field label="订阅地址" name="subscription_url" disabled={readingAddress} error={problem?.field === 'url' ? problem.message : undefined}
           hint={addressUnavailable ? '无法读取已保存的地址。留空沿用原地址。' : form.urlStored ? '留空沿用已保存的订阅地址。' : undefined}>
           <Input type="url" spellCheck={false} autoCapitalize="none" maxLength={8192} placeholder={readingAddress ? '正在读取订阅地址…' : 'https://…'}
             value={form.url} onChange={event => change('url', event.target.value)} />
         </Field>}
+        {localInput && <div className="stack tight">
+          <Field label={inputMode === 'yaml' ? 'YAML 内容' : '节点分享链接'} name="source_content"
+            hint={inputMode === 'yaml' ? '支持含 proxies 的配置或节点数组。' : '每行一条，也可粘贴 Base64 编码的链接列表。'}
+            error={problem?.field === 'content' ? problem.message : undefined}>
+            <Textarea className="source-import-text" rows={4} spellCheck={false} autoCapitalize="none"
+              value={localInput.text} onChange={event => changeText(event.target.value)}
+              placeholder={inputMode === 'yaml' ? 'proxies:\n  - name: 香港 01\n    type: vmess\n    …' : 'ss://…\nssr://…\nvmess://…\nvless://…'} />
+          </Field>
+          {inputMode === 'yaml' && <div className="actions">
+            <Input ref={yamlFile} type="file" accept=".yaml,.yml,application/yaml,text/yaml" hidden aria-label="YAML 文件" onChange={readYamlFile} />
+            <Button size="small" icon={Upload} busy={busy === 'file'} onClick={() => yamlFile.current.click()}>选择 YAML 文件</Button>
+          </div>}
+        </div>}
         {source && !form.local && <div className="actions">
-          <Button icon={RefreshCw} size="small" busy={busy === 'test'} onClick={() => testLink()}>测试订阅</Button>
+          <Button icon={RefreshCw} size="small" busy={busy === 'test'} onClick={() => previewInput()}>测试订阅</Button>
           {testResult?.nodes.length > 0 && <Badge tone="success" role="status">{formatNumber(testResult.nodes.length)} 个可导入</Badge>}
         </div>}
         {testResult?.savedData && <p className="muted field-note">筛选使用已保存的节点。可从订阅源列表刷新节点。</p>}
         {testResult?.rejected.length > 0 && <RejectedItems data={testResult} />}
         <Field label="续费日期（可选）" name="renewal_date" error={problem?.field === 'renewalDate' ? problem.message : undefined}
-          hint={form.local ? `概览会在续费前 ${renewalNoticeDays} 天内提醒一次。` : `概览提前 ${renewalNoticeDays} 天提醒。留空时采用订阅到期日。`}>
+          hint={local ? `概览会在续费前 ${renewalNoticeDays} 天内提醒一次。` : `概览提前 ${renewalNoticeDays} 天提醒。留空时采用订阅到期日。`}>
           <Input ref={renewalInput} type="date" min="0001-01-01" max="9999-12-31" value={form.renewalDate ?? ''} onChange={event => change('renewalDate', event.target.value)} />
         </Field>
-        {!form.local && <Disclosure title={'刷新设置 · ' + (!form.enabled ? '已停用' : form.paused ? '已暂停' : `每 ${form.minutes} 分钟`)} open={advanced} onOpenChange={setAdvanced}>
+        {!local && <Disclosure title={'刷新设置 · ' + (!form.enabled ? '已停用' : form.paused ? '已暂停' : `每 ${form.minutes} 分钟`)} open={advanced} onOpenChange={setAdvanced}>
           <Field label="更新间隔（分钟）" name="refresh_minutes" error={problem?.field === 'minutes' ? problem.message : undefined}><Input type="number" min="1" max="43200" value={form.minutes} onChange={event => change('minutes', Number(event.target.value))} /></Field>
           <FieldGroup className="toggle-list" aria-label="订阅源状态">
             <Toggle label="启用订阅源" detail="停用后，下一次发布将排除该订阅源。" checked={form.enabled} onChange={value => change('enabled', value)} />
@@ -279,6 +335,10 @@ function SourceEditor({ source, first, onClose }) {
             {unknown > 0 && <span>未知地区 {formatNumber(unknown)}</span>}
             {source && changeCount !== 0 && <span>保留变化 {changeCount > 0 ? '+' : ''}{changeCount}</span>}
           </p>
+        </div>}
+        {data?.rejected.length > 0 && <div className="stack tight">
+          {localInput && <p className="field-note" role="status">保存时将跳过无法导入的条目。</p>}
+          <RejectedItems data={data} />
         </div>}
         <FilterForm filter={form.filter} onChange={value => change('filter', value)} reset={() => change('filter', structuredClone(defaultFilter))} />
         <Disclosure compact title="筛选模板">
@@ -310,7 +370,6 @@ function SourceEditor({ source, first, onClose }) {
           </div> : <Empty icon={Network} title={rows.length ? '没有匹配的节点' : '暂无可预览的节点'}
             actions={rows.length ? <Button size="small" onClick={() => { setPreviewFilter('all'); setPreviewQuery(''); setOffset(0) }}>清除筛选</Button>
               : <Button size="small" onClick={() => showStep('settings')}>返回订阅设置</Button>} />}
-          {data?.rejected.length > 0 && <RejectedItems data={data} />}
         </section>
       </div>}
     </div>

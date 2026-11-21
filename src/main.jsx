@@ -353,9 +353,9 @@ function App() {
     return () => window.removeEventListener('keydown', shortcut)
   }, [Boolean(state), navigate])
 
-  const save = useCallback(async (draft, revision = state?.revision, message) => {
+  const save = useCallback(async (draft, revision = state?.revision, message, localInputs) => {
     try {
-      const next = await call('draft', { revision, draft })
+      const next = await call('draft', { revision, draft, localInputs })
       applyState(next)
       if (message) notify(message)
       return next

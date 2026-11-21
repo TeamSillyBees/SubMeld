@@ -1,8 +1,10 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { once } from 'node:events'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
-import { parse } from 'yaml'
+import { parse, stringify } from 'yaml'
+import { createApplication } from '../../server/http.js'
 
 const screenshots = process.env.SUBMELD_SCREENSHOT_DIR
 const port = Number(process.env.SUBMELD_BROWSER_TEST_PORT) || 47891
@@ -485,4 +487,92 @@ test('creates an account, filters three airports, builds outlets, tests rules an
   await audit(page, '窄屏基础设置')
   if (screenshots) await page.screenshot({ path: join(screenshots, 'submeld-mobile-settings.png'), fullPage: true, animations: 'disabled' })
   expect(errors).toEqual([])
+})
+
+test('imports pasted YAML, a YAML file and multiline node links through the source editor', async ({ page }, testInfo) => {
+  const directory = testInfo.outputPath('workspace')
+  const password = 'local import browser fixture'
+  const app = createApplication({ directory, password, tickMs: 0, binary: process.env.SUBMELD_MIHOMO_BIN })
+  try {
+    app.server.listen(0, '127.0.0.1')
+    await once(app.server, 'listening')
+    const origin = 'http://127.0.0.1:' + app.server.address().port
+    expect((await page.request.post(origin + '/api/login', { data: { password } })).ok()).toBe(true)
+    await page.goto(origin + '/#/sources/new')
+    const editor = page.getByRole('dialog', { name: '添加订阅源' })
+    const modes = editor.getByRole('radiogroup', { name: '导入方式' })
+    const yaml = editor.getByLabel('YAML 内容')
+    const links = editor.getByLabel('节点分享链接')
+    const preview = editor.getByRole('button', { name: '解析并预览' })
+    const add = page.getByRole('button', { name: '添加订阅源', exact: true })
+    const node = { name: '粘贴节点', type: 'ss', server: 'edge.example.net', port: 443, cipher: 'aes-128-gcm', password: 'fixture' }
+    const pasted = stringify({ proxies: [node] })
+    await expect(modes.getByRole('radio', { name: '订阅链接' })).toBeChecked()
+    await editor.getByLabel('订阅地址').fill('https://unused.example/sub')
+    await editor.getByLabel('订阅源名称').fill('本地 YAML')
+    await modes.getByRole('radio', { name: 'YAML 配置' }).click()
+    await preview.click()
+    await expect(yaml).toBeFocused()
+    await expect(yaml).toHaveAttribute('aria-invalid', 'true')
+    await expect(yaml).toHaveAttribute('data-1p-ignore')
+    await yaml.fill(pasted)
+    await audit(page, 'YAML 导入')
+    if (screenshots) {
+      await mkdir(screenshots, { recursive: true })
+      await editor.screenshot({ path: join(screenshots, 'submeld-import-yaml.png'), animations: 'disabled' })
+    }
+    await preview.click()
+    await expect(editor.getByText('粘贴节点', { exact: true })).toBeVisible()
+    await editor.getByRole('button', { name: '返回设置' }).click()
+    await modes.getByRole('radio', { name: '节点链接' }).click()
+    await expect(links).toHaveValue('')
+    await expect(preview).toBeVisible()
+    await modes.getByRole('radio', { name: 'YAML 配置' }).click()
+    await expect(yaml).toHaveValue(pasted)
+    const fileText = stringify([{ ...node, name: '文件节点' }])
+    const selecting = page.waitForEvent('filechooser')
+    await editor.getByRole('button', { name: '选择 YAML 文件' }).click()
+    await (await selecting).setFiles({ name: 'nodes.yml', mimeType: 'application/yaml', buffer: Buffer.from(fileText) })
+    await expect(yaml).toHaveValue(fileText)
+    await editor.getByRole('button', { name: '直接保存' }).click()
+    const yamlCard = page.getByRole('article', { name: '本地 YAML' })
+    await expect(yamlCard.getByText('本地导入')).toBeVisible()
+    await expect(yamlCard.getByRole('link', { name: '保留 1 / 1' })).toBeVisible()
+    await expect(yamlCard.getByRole('button', { name: /立即刷新/ })).toHaveCount(0)
+
+    await page.setViewportSize({ width: 390, height: 844 })
+    await add.click()
+    await editor.getByLabel('订阅源名称').fill('节点链接导入')
+    await modes.getByRole('radio', { name: '节点链接' }).click()
+    await links.fill('ssr://!!!')
+    await editor.getByRole('button', { name: '直接保存' }).click()
+    await expect(links).toHaveAttribute('aria-invalid', 'true')
+    const encode = value => Buffer.from(value).toString('base64url')
+    const ssr = 'ssr://' + encode('edge.example.net:443:origin:aes-128-ctr:plain:' + encode('fixture') + '/?remarks=' + encode('香港 SSR'))
+    const vless = 'vless://ad316e0d-6b02-4d7d-926d-617cd449d405@edge.example.net:443#Tokyo'
+    await links.fill([ssr, vless, 'ssr://!!!'].join('\n'))
+    await audit(page, '窄屏节点链接导入')
+    expect(await editor.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+    if (screenshots) await editor.screenshot({ path: join(screenshots, 'submeld-mobile-import-links.png'), animations: 'disabled' })
+    await editor.getByRole('button', { name: '直接保存' }).click()
+    await expect(editor.getByText('保留 2 / 3')).toBeVisible()
+    await editor.getByRole('button', { name: '查看 1 项无法导入的内容' }).click()
+    await expect(editor.getByText(/第 3 项 ·/)).toBeVisible()
+    const beforeSave = await (await page.request.get(origin + '/api/state')).json()
+    expect(beforeSave.draft.sources).toHaveLength(1)
+    await editor.getByRole('row').filter({ hasText: 'Tokyo' }).getByRole('button', { name: '手动排除' }).click()
+    await editor.getByRole('button', { name: '保存订阅源' }).click()
+    await expect(editor).toBeHidden()
+    await page.reload()
+    await expect(page.getByRole('article', { name: '节点链接导入' }).getByRole('link', { name: '保留 1 / 3' })).toBeVisible()
+    const saved = await (await page.request.get(origin + '/api/state')).json()
+    expect(saved.draft.sources.every(source => source.local && !source.urlStored)).toBe(true)
+    const published = await page.request.post(origin + '/api/publish', { data: { revision: saved.revision } })
+    expect(published.ok()).toBe(true)
+    const config = parse(await (await page.request.get(origin + '/api/download')).text())
+    expect(config.proxies.map(node => [node.name, node.type])).toEqual([['文件节点', 'ss'], ['香港 SSR', 'ssr']])
+  } finally {
+    await app.close()
+    await rm(directory, { recursive: true, force: true })
+  }
 })

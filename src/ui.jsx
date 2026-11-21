@@ -361,7 +361,7 @@ export function OutletSelect({ groups, value, onChange, disabled, className, lab
 export function SourceStatus({ entry, record }) {
   if (record?.status === 'running' || record?.status === 'queued') return <Badge tone="accent"><Spinner aria-hidden="true" />{record.status === 'queued' ? '等待刷新' : '刷新中…'}</Badge>
   if (!entry.enabled) return <Badge dot>已停用</Badge>
-  if (entry.local && record?.good) return <Badge dot>本地文件</Badge>
+  if (entry.local && record?.good) return <Badge dot>本地导入</Badge>
   if (record?.error) return <Badge tone="danger" dot>{record.good ? '失败，使用旧数据' : '获取失败'}</Badge>
   if (entry.paused) return <Badge tone="warning" dot>更新已暂停</Badge>
   if (record?.good) return <Badge tone="success" dot>可用</Badge>

@@ -145,6 +145,42 @@ test('plain and Base64 links preserve the fragment and connection credentials', 
   assert.equal(plain.nodes[0].connection['ws-opts'].path, '/edge')
 })
 
+test('SSR links preserve IPv6, Unicode names, and protocol and obfuscation parameters', () => {
+  const encode = text => Buffer.from(text).toString('base64url')
+  const endpoint = '[2001:db8::42]:443:auth_aes128_sha1:aes-128-ctr:http_simple:' + encode('凭据:fixture')
+  const params = new URLSearchParams({ remarks: encode(rawName), protoparam: encode('7:fixture'), obfsparam: encode('cdn.example.net') })
+  const link = 'ssr://' + encode(endpoint + '/?' + params)
+  const data = parseSource(Buffer.from(encode(link)), [], 'links')
+  assert.deepEqual(data.rejected, [])
+  assert.equal(data.nodes[0].name, rawName)
+  assert.deepEqual(data.nodes[0].connection, {
+    type: 'ssr', server: '2001:db8::42', port: 443, protocol: 'auth_aes128_sha1', cipher: 'aes-128-ctr',
+    obfs: 'http_simple', password: '凭据:fixture', udp: true, 'protocol-param': '7:fixture', 'obfs-param': 'cdn.example.net',
+  })
+  const unnamed = parseSource(Buffer.from('ssr://' + encode(endpoint)), [])
+  assert.equal(unnamed.nodes[0].name, '[2001:db8::42]:443')
+  assert.equal(parseSource(Buffer.from('ssr://' + encode('bad endpoint')), [], 'links').rejected.length, 1)
+})
+
+test('pasted formats stay distinct and report invalid entries alongside usable links', () => {
+  const yamlList = Buffer.from(stringify([node('香港 01'), node('香港 02')]).replace(/^./gm, '  $&'))
+  const link = 'vless://ad316e0d-6b02-4d7d-926d-617cd449d405@edge.example.net:443#Tokyo'
+  const unnamedSS = 'ss://' + Buffer.from('aes-128-gcm:fixture@[2001:db8::1]:8443').toString('base64url')
+  const unnamed = Buffer.from([unnamedSS, link.split('#')[0]].join('\n'))
+  assert.deepEqual(parseSource(unnamed, [], 'links').nodes.map(node => node.name), ['[2001:db8::1]:8443', 'edge.example.net:443'])
+  assert.equal(parseSource(unnamed, []).nodes.length, 0)
+  assert.deepEqual(parseSource(yamlList, [], 'yaml').nodes.map(node => node.name), ['香港 01', '香港 02'])
+  assert.throws(() => parseSource(yamlList, [], 'links'), /节点分享链接/)
+  assert.throws(() => parseSource(Buffer.from(link), [], 'yaml'), /YAML 配置需要包含/)
+  const mixed = 'invalid first row\r\n\r\n  ' + link + '\r\nssr://!!!'
+  for (const text of [mixed, Buffer.from(mixed).toString('base64')]) {
+    const data = parseSource(Buffer.from(text), [], 'links')
+    assert.equal(data.total, 3)
+    assert.deepEqual(data.nodes.map(node => node.name), ['Tokyo'])
+    assert.deepEqual(data.rejected.map(row => row.item), ['第 1 项', '第 3 项'])
+  }
+})
+
 test('rule providers compile locally without an upstream request from the client', () => {
   const data = parseProvider(Buffer.from('payload:\n  - "+.github.com"\n  - github.io\n'), { behavior: 'domain', format: 'yaml' })
   const entry = { ...service('provider-a', 'DIRECT'), provider: { behavior: 'domain', url: 'https://provider.example/list' } }

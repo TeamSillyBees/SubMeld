@@ -16,6 +16,7 @@ export const logSpace = profile => 'updates/' + profile.id
 export const noteSpace = profile => 'notes/' + profile.id
 const versionKey = seq => String(seq).padStart(12, '0')
 const defaultLibrary = { filters: [], groups: [], providers: [] }
+const localInputSchema = z.object({ format: z.enum(['yaml', 'links']), text: z.string().min(1) })
 const errorMessage = error => error instanceof UserError ? error.message : '服务端处理失败，请稍后重试。'
 
 export function makeProfile(title, draft = blankDraft()) {
@@ -343,11 +344,25 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
     return probe?.expires > Date.now() ? probe : null
   }
 
+  function parseLocalInput(input, allowPartial) {
+    const { format, text } = read(localInputSchema, input)
+    if (!text.trim()) throw new UserError('请填写需要导入的内容。')
+    const data = parseSource(Buffer.from(text), [], format)
+    if (!data.nodes.length || (data.rejected.length && !allowPartial)) {
+      throw new UserError(data.nodes.length ? '部分条目无法导入，请核对预览后保存。' : '没有可导入的节点，请检查输入内容。', 422,
+        publicData('source', data, getAllSecrets()))
+    }
+    return data
+  }
+
   async function probe(profileId, owner, body) {
     const profile = profileFor(profileId)
     const kind = body.kind
     if (kind !== 'source' && kind !== 'provider') throw new UserError('无法识别测试类型。')
     const entryId = read(id, body.id)
+    if (kind === 'source' && body.input !== undefined) {
+      return publicData(kind, parseLocalInput(body.input, true), getAllSecrets())
+    }
     const saved = jobsFor(profile.draft).find(job => job.kind === kind && job.id === entryId)
     const cached = kind === 'provider' && body.catalogId
       ? (store.get('system', 'library') ?? defaultLibrary).providers.find(entry => entry.id === body.catalogId)
@@ -410,10 +425,16 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
       for (const source of draft.sources.filter(entry => entry.local)) {
         const saved = store.get(dataSpace(profile), datasetKey('source', source))?.good
         const nodes = body.localNodes?.[source.id]
-        if (saved && !nodes) continue
-        if (!Array.isArray(nodes) || !nodes.length || nodes.length > 16000) throw new UserError('本地来源需要 1 到 16,000 个节点。')
-        const imported = parseSource(Buffer.from(JSON.stringify({ proxies: nodes })), [])
-        if (imported.rejected.length) throw new UserError('本地节点包含无法导入的连接参数。', 422)
+        const input = body.localInputs?.[source.id]
+        if (saved && !nodes && input === undefined) continue
+        let imported
+        if (input !== undefined) {
+          imported = parseLocalInput(input, input?.acceptPartial === true)
+        } else {
+          if (!Array.isArray(nodes) || !nodes.length || nodes.length > 16000) throw new UserError('本地来源需要 1 到 16,000 个节点。')
+          imported = parseSource(Buffer.from(JSON.stringify({ proxies: nodes })), [])
+          if (imported.rejected.length) throw new UserError('本地节点包含无法导入的连接参数。', 422)
+        }
         if (saved && compareDigest(saved.nodes) !== compareDigest(imported.nodes)) throw new UserError('替换本地节点时，请使用新的来源标识。', 409)
         localData.set(source.id, imported)
       }
@@ -428,7 +449,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
             ...(job.kind === 'source' && probe?.subscriptionInfo ? { subscriptionInfo: probe.subscriptionInfo } : {}),
           })
           rememberUrls(data.urls)
-          persistLog(profile, job, { outcome: 'success', trigger: job.local ? 'import' : 'probe', message: job.local ? '已从配置文件导入节点。' : '测试成功并保存。', diff: computeDiff(null, data, job.kind) })
+          persistLog(profile, job, { outcome: 'success', trigger: job.local ? 'import' : 'probe', message: job.local ? '已导入本地节点。' : '测试成功并保存。', diff: computeDiff(null, data, job.kind) })
         }
         rememberUrls(draft.sources.map(source => source.url).filter(Boolean))
         if (compareDigest(draft) !== compareDigest(profile.draft)) {

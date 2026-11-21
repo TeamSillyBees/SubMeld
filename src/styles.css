@@ -458,11 +458,11 @@ html:has(.settings-save-bar) { scroll-padding-bottom: 6rem; }
 .panel-count { margin-inline-start: .12rem; }
 .tech-chip { border: 1px solid var(--border); background: var(--card); white-space: pre-wrap; }
 .config-page :is([data-slot=input], [data-slot=textarea], [data-slot=input-group], [data-slot=native-select]),
-.source-settings-dialog :is([data-slot=input], [data-slot=input-group], [data-slot=native-select]) {
+.source-settings-dialog :is([data-slot=input], [data-slot=textarea], [data-slot=input-group], [data-slot=native-select]) {
   background-color: var(--background); border-color: #bac6da;
 }
 .config-page :is([data-slot=input], [data-slot=native-select], [data-slot=textarea]):focus-visible,
-.source-settings-dialog :is([data-slot=input], [data-slot=native-select]):focus-visible { border-color: var(--ring); }
+.source-settings-dialog :is([data-slot=input], [data-slot=textarea], [data-slot=native-select]):focus-visible { border-color: var(--ring); }
 .config-page .config-toolbar, .template-strip {
   display: flex; align-items: center; flex-wrap: wrap; gap: .55rem .8rem;
 }
@@ -511,6 +511,10 @@ html:has(.settings-save-bar) { scroll-padding-bottom: 6rem; }
 .source-settings-dialog .workspace-dialog-header { border-bottom: 0; padding-bottom: .35rem; }
 .source-settings-dialog .workspace-dialog-body { padding-block: .65rem 1rem; }
 .source-settings-dialog .editor-steps { gap: 1rem; }
+.source-import-mode[data-slot=field-set] { gap: .4rem; }
+.source-import-mode .segmented { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
+.source-import-mode .segmented [data-slot=toggle-group-item] { min-height: 2.5rem; }
+.source-import-text { field-sizing: fixed; resize: vertical; font-family: var(--font-mono); }
 body:has(.source-settings-dialog) [data-slot=dialog-overlay] { background-color: rgb(37 48 68 / 14%); backdrop-filter: blur(4px); }
 .source-scope .workspace-panel-header { border-bottom: 0; }
 .scope-pills { min-width: 0; max-width: 100%; }

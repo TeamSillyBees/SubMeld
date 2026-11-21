@@ -64,15 +64,15 @@ export function RuleSetPicker({ groups, added, busy, onAdd, onEdit, onManual, on
         <Button size="small" key={key} aria-pressed={chosen === key} title={key} onClick={() => choose(key)}>{titleFor(key)}{added.has(key) && <Check aria-label="已添加" />}</Button>)}</div>}
       <div className="catalog-selection" ref={selection}>
         <div className="catalog-selected-name">{chosen ? <><div className="chips"><span className="tech-chip">RULE-SET</span><code>{chosen}</code></div>
-          <p className="field-note muted">MetaCubeX · {chosen.startsWith('geoip/') ? 'IP 网段' : '域名'} · 客户端每 24 小时更新</p></>
+          <p className="field-note muted">MetaCubeX · {chosen.startsWith('geoip/') ? 'IP 网段' : '域名'} · 更新间隔 24 小时</p></>
           : <p className="muted">请从搜索结果或常用列表中选择规则集。</p>}</div>
         {existing ? <Button icon={Pencil} size="small" onClick={() => onEdit(existing.id)}>编辑已添加的规则集</Button> : <>
-          <Field label="规则集目标出口"><OutletSelect groups={groups} value={target} onChange={setTarget} /></Field>
+          <Field label="规则集的出站策略"><OutletSelect groups={groups} value={target} onChange={setTarget} /></Field>
           <Button variant="primary" icon={Plus} busy={busy} disabled={!chosen || !validTarget} onClick={() => onAdd(chosen, titleFor(chosen), target)}>添加规则集</Button>
         </>}
       </div>
       <div className="catalog-alternatives"><Button size="small" variant="ghost" onClick={onManual}>手动添加规则</Button>
-        {!groups.some(group => group.enabled) && <RouteLink className="text-link" page="groups" id="new">创建代理组作为出口</RouteLink>}</div>
+        {!groups.some(group => group.enabled) && <RouteLink className="text-link" page="groups" id="new">新建代理组</RouteLink>}</div>
     </div>
   </Panel>
 }

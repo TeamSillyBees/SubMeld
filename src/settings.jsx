@@ -61,7 +61,7 @@ export function SettingsPage() {
     } catch (error) { setError(error instanceof SyntaxError ? '高级配置需要有效的 JSON 对象。' : error.message) }
     finally { setBusy(false) }
   }
-  const dnsChoices = [['default', '沿用客户端 DNS'], ['encrypted', '加密 DNS · Fake IP'], ['real', '真实 IP · Redir-Host']]
+  const dnsChoices = [['default', '系统 DNS'], ['encrypted', '加密 DNS · Fake IP'], ['real', '真实 IP · Redir-Host']]
   const { nameserverPolicy, ...presetFields } = form.dns
   const selectedPreset = dnsChoices.find(([id]) => JSON.stringify(presetFields) === JSON.stringify(dnsPresets[id]))?.[0]
   function applyDnsPreset(id) {
@@ -70,7 +70,7 @@ export function SettingsPage() {
   }
   return <div className="stack config-page">
     <h1 className="sr-only" tabIndex={-1}>基础设置</h1>
-    <Panel title={<>FlClash / Mihomo 基础配置 <code className="tech-chip">{form.mode} · {form.dns.enabled ? form.dns.mode : '系统 DNS'}</code></>}
+    <Panel title={<>基础配置 <code className="tech-chip">{form.mode} · {form.dns.enabled ? form.dns.mode : '系统 DNS'}</code></>}
       actions={<><Button size="small" icon={Layers3} disabled={dirty || busy} onClick={() => setProfiles(true)}>配置方案</Button>
         <Button size="small" icon={Check} disabled={!dirty || busy} onClick={submit}>保存基础设置</Button></>}>
       <div className="config-toolbar" onFocusCapture={rememberField}><div className="template-strip"><SlidersHorizontal aria-hidden="true" /><span>DNS 预设</span>
@@ -82,7 +82,7 @@ export function SettingsPage() {
           {issues.filter(issue => issue.code === 'base-ports').map(issue => <Alert key={issue.code} tone="danger">{issue.message}</Alert>)}
           <FieldGroup className="form-grid">
             <Field label="混合端口（mixed-port）"><Input type="number" min="0" max="65535" value={form.port} onChange={event => set('port', Number(event.target.value))} /></Field>
-            <FieldSet><FieldLegend variant="label">运行模式</FieldLegend><Segmented label="运行模式" value={form.mode} onChange={value => set('mode', value)} items={ [['rule', '规则分流'], ['global', '全局代理'], ['direct', '全部直连']] } />
+            <FieldSet><FieldLegend variant="label">运行模式</FieldLegend><Segmented label="运行模式" value={form.mode} onChange={value => set('mode', value)} items={ [['rule', '规则模式'], ['global', '全局模式'], ['direct', '直连模式']] } />
               {modeWarning && <span className="field-note warning-text">{modeWarning}</span>}</FieldSet>
           </FieldGroup>
           <Disclosure title="独立端口与本机控制器" defaultOpen={Boolean(form.httpPort || form.socksPort || form.controllerPort)}><FieldGroup className="form-grid">
@@ -106,18 +106,18 @@ export function SettingsPage() {
           <Disclosure title="Mihomo 高级配置"><Field label="附加配置（JSON）" hint="可设置 profile、sniffer，以及 dns 的 listen、use-system-hosts、fake-ip-range 和 fallback-filter。">
             <Textarea rows={10} spellCheck={false} value={advancedText} onChange={event => setAdvancedText(event.target.value)} />
           </Field></Disclosure>
-          <p className="field-note muted">端口设为 0 时关闭对应监听。FlClash 的本地覆写会影响实际生效的设置。</p>
+          <p className="field-note muted">端口设为 0 时关闭对应监听。</p>
         </div>
       </Panel>
       <Panel title="DNS 行为与策略">
         <div className="panel-padding stack">
           {issues.filter(issue => issue.code.startsWith('dns-')).map(issue => <Alert key={issue.code} tone="danger">{issue.message}</Alert>)}
-          <Toggle label="启用 DNS（dns.enable）" checked={form.dns.enabled} onChange={value => dns('enabled', value)} detail="关闭后由客户端和系统解析。" />
+          <Toggle label="启用 DNS（dns.enable）" checked={form.dns.enabled} onChange={value => dns('enabled', value)} detail="关闭内置 DNS 时使用系统解析器。" />
           <fieldset className="dns-fields stack" key={fieldKey} disabled={!form.dns.enabled}>
             <FieldSet><FieldLegend variant="label">增强模式（enhanced-mode）</FieldLegend>
               <Segmented label="DNS 响应方式" value={form.dns.mode} onChange={value => dns('mode', value)} items={ [['fake-ip', 'Fake IP'], ['redir-host', 'Redir-Host']] } />
             </FieldSet>
-            <Toggle label="遵循分流规则（respect-rules）" checked={form.dns.respectRules ?? false} onChange={value => dns('respectRules', value)} />
+            <Toggle label="遵循路由规则（respect-rules）" checked={form.dns.respectRules ?? false} onChange={value => dns('respectRules', value)} />
             <ListField label="主要解析服务器（nameserver）" value={form.dns.nameservers} onChange={value => dns('nameservers', value)} placeholder="https://dns.alidns.com/dns-query" hint="每行一个，可填写 IP、DoH 或 DoT 地址。" />
             <ListField label="备用解析服务器（fallback）" value={form.dns.fallback} onChange={value => dns('fallback', value)} placeholder="tls://1.1.1.1" />
             <Disclosure title="解析策略与例外"><FieldGroup>
@@ -136,7 +136,7 @@ export function SettingsPage() {
     {state.library.filters.length > 0 && <Panel title="筛选模板">
       <div className="panel-padding stack tight">{state.library.filters.map(template => <div className="list-option" key={template.id}>
         <strong>{template.name}</strong><IconButton icon={Trash2} label={'删除筛选模板 ' + template.name} onClick={async () => {
-          if (!await confirm({ title: '删除筛选模板？', detail: '已应用此模板的机场会保留其筛选条件。', action: '删除模板', danger: true })) return
+          if (!await confirm({ title: '删除筛选模板？', detail: '已应用此模板的订阅源会保留其筛选条件。', action: '删除模板', danger: true })) return
           try { applyState(await call('library', { ...state.library, filters: state.library.filters.filter(item => item.id !== template.id) })); notify('筛选模板已删除') } catch (error) { notify(error.message, 'danger') }
         }} />
       </div>)}</div>
@@ -255,8 +255,8 @@ function BackupDialog({ mode, onClose }) {
       disabled={password.length < 10 || restore && !file} onClick={commit}>{restore ? '恢复备份' : '下载备份'}</Button></>}>
     <FieldGroup>
       <Alert tone={restore ? 'warning' : 'info'}>{restore
-        ? '恢复会替换全部配置方案及历史版本，保留当前管理密码。原私有链接将失效，需要在 FlClash 中添加新链接。'
-        : '文件包含机场凭证、节点连接参数、配置和发布历史。请将口令与文件分开保存。'}</Alert>
+        ? '恢复会替换全部配置方案及历史版本，保留当前管理密码。原私有链接将失效，恢复后需生成新的订阅链接。'
+        : '文件包含订阅源凭证、节点连接参数、配置和发布历史。请将口令与文件分开保存。'}</Alert>
       {error && <Alert tone="danger">{error}</Alert>}
       {restore && <Field label="备份文件"><Input type="file" accept=".json,application/json" onChange={event => setFile(event.target.files?.[0] ?? null)} /></Field>}
       <Field label="备份口令" hint="至少 10 个字符"><Input type="password" autoComplete="off" value={password} onChange={event => setPassword(event.target.value)} /></Field>
@@ -273,7 +273,7 @@ export function SafetyPage() {
   const [busy, setBusy] = useState(false)
   async function manage(action) {
     if (action === 'rotate' && state.hasLink && !await confirm({
-      title: '更换私有订阅链接？', detail: '旧地址会立即失效。请在 FlClash 中替换原地址。', action: '更换链接', danger: true,
+      title: '更换私有订阅链接？', detail: '旧地址会立即失效，已订阅的设备需要更新链接。', action: '更换链接', danger: true,
     })) return
     if (action === 'revoke' && !await confirm({
       title: '撤销私有订阅链接？', detail: '保存此链接的客户端将无法再次下载配置。', action: '撤销链接', danger: true,

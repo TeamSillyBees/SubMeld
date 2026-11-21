@@ -77,7 +77,7 @@ function SourceEditor({ source, first, onClose }) {
   const [previewQuery, setPreviewQuery] = useState('')
   const [templateName, setTemplateName] = useState('')
   const dirty = JSON.stringify(form) !== JSON.stringify(initial)
-  const guard = useUnsavedChanges(dirty, '本次填写的机场设置将被丢弃。')
+  const guard = useUnsavedChanges(dirty, '本次填写的订阅源设置将被丢弃。')
   const record = state.sources[form.id]
   const current = draftDataset(record)
   const testResult = testedUrl === form.url ? sample : null
@@ -104,7 +104,7 @@ function SourceEditor({ source, first, onClose }) {
     if (form.local) return true
     const address = form.url.trim()
     if (form.urlStored && !address) return true
-    if (!address) { fieldProblem('url', '请输入机场订阅地址。'); return false }
+    if (!address) { fieldProblem('url', '请输入订阅地址。'); return false }
     try {
       const url = new URL(address)
       if (url.username || url.password) {
@@ -119,7 +119,7 @@ function SourceEditor({ source, first, onClose }) {
 
   function validateSettings() {
     if (!validateAddress()) return false
-    if (!form.name.trim()) { fieldProblem('name', '请填写机场展示名称。'); return false }
+    if (!form.name.trim()) { fieldProblem('name', '请填写订阅源名称。'); return false }
     const dateInput = renewalInput.current
     if (dateInput && !dateInput.validity.valid) {
       fieldProblem('renewalDate', '请填写完整的续费日期，或清空日期。')
@@ -183,9 +183,9 @@ function SourceEditor({ source, first, onClose }) {
   const changeCount = retained - currentCount
   const toggleManual = id => change('filter', { ...form.filter, manual: form.filter.manual.includes(id) ? form.filter.manual.filter(key => key !== id) : [...form.filter.manual, id] })
   const steps = [['settings', '订阅设置'], ['filter', '筛选与预览']]
-  return <Modal wide={filtering} className={!filtering ? 'source-settings-dialog' : undefined} title={source ? '编辑机场 · ' + source.name : '添加机场'}
+  return <Modal wide={filtering} className={!filtering ? 'source-settings-dialog' : undefined} title={source ? '编辑订阅源 · ' + source.name : '添加订阅源'}
     initialFocusRef={first === 'renewal' ? renewalInput : undefined}
-    detail={!source && !filtering ? '填写机场名称与上游订阅地址，可在保存前预览节点。' : undefined}
+    detail={!source && !filtering ? '填写订阅源名称与上游订阅地址，可在保存前预览节点。' : undefined}
     onClose={stop} footer={<>
       <Button variant="ghost" disabled={Boolean(busy)} onClick={stop}>取消</Button>
       {!source && filtering && <Button icon={ArrowLeft} disabled={Boolean(busy)} onClick={() => showStep('settings')}>返回设置</Button>}
@@ -194,11 +194,11 @@ function SourceEditor({ source, first, onClose }) {
         <Button variant="primary" icon={ArrowRight} type="submit" form={formId} busy={busy === 'test'} disabled={Boolean(busy)}>
           {busy === 'test' ? '正在测试…' : testResult?.nodes.length ? '预览筛选结果' : '测试并预览'}
         </Button>
-      </> : <Button variant="primary" icon={Check} busy={busy === 'save'} disabled={Boolean(busy)} onClick={commit}>保存机场</Button>}
+      </> : <Button variant="primary" icon={Check} busy={busy === 'save'} disabled={Boolean(busy)} onClick={commit}>保存订阅源</Button>}
     </>}>
     <div className="stack">
-      {source ? <div inert={Boolean(busy)}><Segmented label="机场编辑内容" items={steps} value={step} onChange={setStep} /></div>
-        : <ol className="editor-steps" aria-label="添加机场步骤">
+      {source ? <div inert={Boolean(busy)}><Segmented label="订阅源编辑内容" items={steps} value={step} onChange={setStep} /></div>
+        : <ol className="editor-steps" aria-label="添加订阅源步骤">
           {steps.map(([key, label], index) => <li key={key} aria-current={step === key ? 'step' : undefined}>
             <span aria-hidden="true">{index === 0 && filtering ? <Check /> : index + 1}</span>{label}
           </li>)}
@@ -211,7 +211,7 @@ function SourceEditor({ source, first, onClose }) {
           const action = accepting ? '采纳候选节点' : '撤销采纳'
           if ((accepting || dirty) && !await confirm({
             title: accepting ? '采纳候选节点？' : '撤销采纳？',
-            detail: (accepting ? '候选节点将用于配置预览，下次发布时写入订阅。' : '配置预览将恢复使用上一次有效的节点。') + (dirty ? '此操作也会放弃本次对机场设置的修改。' : ''),
+            detail: (accepting ? '候选节点将用于配置预览，下次发布时写入订阅。' : '配置预览将恢复使用上一次有效的节点。') + (dirty ? '此操作也会放弃本次对订阅源设置的修改。' : ''),
             action,
           })) return
           setBusy('candidate')
@@ -227,8 +227,8 @@ function SourceEditor({ source, first, onClose }) {
       }}>
         <h2 className="sr-only" tabIndex={-1} ref={stepHeading}>订阅设置</h2>
         <FieldGroup className="form-grid">
-          <Field label="机场展示名称" name="source_name" error={problem?.field === 'name' ? problem.message : undefined}><Input placeholder="例如主力机场" maxLength={256} value={form.name} onChange={event => change('name', event.target.value)} /></Field>
-          <Field label="节点 Tag（可选）" hint="加在节点原名之前。"><Input maxLength={256} placeholder="[A] " value={form.tag} onChange={event => change('tag', event.target.value)} /></Field>
+          <Field label="订阅源名称" name="source_name" error={problem?.field === 'name' ? problem.message : undefined}><Input placeholder="例如主订阅" maxLength={256} value={form.name} onChange={event => change('name', event.target.value)} /></Field>
+          <Field label="节点名称前缀（可选）" hint="加在节点原名之前。"><Input maxLength={256} placeholder="[A] " value={form.tag} onChange={event => change('tag', event.target.value)} /></Field>
         </FieldGroup>
         {!form.local && <Field label="订阅地址" name="subscription_url" error={problem?.field === 'url' ? problem.message : undefined}
           hint={form.urlStored ? '留空沿用已保存的订阅地址。' : undefined}>
@@ -240,16 +240,16 @@ function SourceEditor({ source, first, onClose }) {
           <Button icon={RefreshCw} size="small" busy={busy === 'test'} onClick={() => testLink()}>测试订阅</Button>
           {testResult?.nodes.length > 0 && <Badge tone="success" role="status">{formatNumber(testResult.nodes.length)} 个可导入</Badge>}
         </div>}
-        {testResult?.savedData && <p className="muted field-note">筛选使用已保存的节点。可从机场列表刷新节点。</p>}
+        {testResult?.savedData && <p className="muted field-note">筛选使用已保存的节点。可从订阅源列表刷新节点。</p>}
         {testResult?.rejected.length > 0 && <RejectedItems data={testResult} />}
         <Field label="续费日期（可选）" name="renewal_date" error={problem?.field === 'renewalDate' ? problem.message : undefined}
-          hint={form.local ? `概览会在续费前 ${renewalNoticeDays} 天内提醒一次。` : `概览提前 ${renewalNoticeDays} 天提醒。留空时采用机场到期日。`}>
+          hint={form.local ? `概览会在续费前 ${renewalNoticeDays} 天内提醒一次。` : `概览提前 ${renewalNoticeDays} 天提醒。留空时采用订阅到期日。`}>
           <Input ref={renewalInput} type="date" min="0001-01-01" max="9999-12-31" value={form.renewalDate ?? ''} onChange={event => change('renewalDate', event.target.value)} />
         </Field>
         {!form.local && <Disclosure title={'刷新设置 · ' + (!form.enabled ? '已停用' : form.paused ? '已暂停' : `每 ${form.minutes} 分钟`)} open={advanced} onOpenChange={setAdvanced}>
           <Field label="更新间隔（分钟）" name="refresh_minutes" error={problem?.field === 'minutes' ? problem.message : undefined}><Input type="number" min="1" max="43200" value={form.minutes} onChange={event => change('minutes', Number(event.target.value))} /></Field>
-          <FieldGroup className="toggle-list" aria-label="机场状态">
-            <Toggle label="启用机场" detail="停用后，下一次发布将排除该机场。" checked={form.enabled} onChange={value => change('enabled', value)} />
+          <FieldGroup className="toggle-list" aria-label="订阅源状态">
+            <Toggle label="启用订阅源" detail="停用后，下一次发布将排除该订阅源。" checked={form.enabled} onChange={value => change('enabled', value)} />
             <Toggle label="暂停定时刷新" detail="暂停后仍可手动刷新。" checked={form.paused} onChange={value => change('paused', value)} />
           </FieldGroup>
         </Disclosure>}
@@ -329,7 +329,7 @@ function SubscriptionFacts({ source, record }) {
   return <dl className="subscription-facts" aria-label="流量与续费">
     {!source.local && <>
       <div><dt>剩余流量</dt><dd>{remainingTraffic(info, empty)}</dd></div>
-      <div><dt>机场到期日</dt><dd>{expiresOn ? <time dateTime={expiresOn}>{expiresOn}</time> : info?.expire === 0 ? '长期有效' : empty}</dd></div>
+      <div><dt>订阅到期日</dt><dd>{expiresOn ? <time dateTime={expiresOn}>{expiresOn}</time> : info?.expire === 0 ? '长期有效' : empty}</dd></div>
     </>}
     <div><dt>续费日期</dt><dd><RouteLink page="sources" id={source.id} detail="renewal">
       {source.renewalDate ? <time dateTime={source.renewalDate}>{source.renewalDate}</time> : '设置日期'}
@@ -345,12 +345,12 @@ function SourceCard({ source, record, stats, index, total, checked, onCheck, mov
   const example = draftDataset(record)?.nodes?.[0]?.name
   const retainedShare = stats.original ? Math.round(stats.retained / stats.original * 100) : null
   async function changeEnabled(enabled) {
-    if (enabled || await confirm({ title: '停用此机场？', detail: '下一次发布将排除此机场的节点。', action: '停用机场' })) editMany([source.id], { enabled })
+    if (enabled || await confirm({ title: '停用此订阅源？', detail: '下一次发布将排除此订阅源的节点。', action: '停用订阅源' })) editMany([source.id], { enabled })
   }
   return <article className="source-card" aria-label={source.name} data-sort-row {...dragProps(index, move, 'source')}>
     <header className="source-card-head">
       <div className="source-card-identity">
-        <Checkbox aria-label={'选择机场 ' + source.name} checked={checked} onCheckedChange={onCheck} />
+        <Checkbox aria-label={'选择订阅源 ' + source.name} checked={checked} onCheckedChange={onCheck} />
         <h2><RouteLink page="sources" id={source.id}>{source.name}</RouteLink></h2>
         {source.tag && <code className="tech-chip">{source.tag}</code>}
         <SourceStatus entry={source} record={record} />
@@ -366,7 +366,7 @@ function SourceCard({ source, record, stats, index, total, checked, onCheck, mov
     <div className="source-card-body">
       <SubscriptionFacts source={source} record={record} />
       <div className="tag-mapping">
-        <div className="between"><h3>Tag 前缀</h3><Button size="small" icon={Pencil} variant="ghost" onClick={() => navigate('sources', source.id)}>编辑 Tag</Button></div>
+        <div className="between"><h3>节点名称前缀</h3><Button size="small" icon={Pencil} variant="ghost" onClick={() => navigate('sources', source.id)}>编辑前缀</Button></div>
         <div className="tag-values"><code>{source.tag || '未设置前缀'}</code>
           {example && <div className="tag-example"><span>{example}</span><ArrowRight aria-hidden="true" /><strong>{source.tag}{example}</strong></div>}
         </div>
@@ -383,7 +383,7 @@ function SourceCard({ source, record, stats, index, total, checked, onCheck, mov
         action={<Button size="small" onClick={() => navigate('sources', source.id, 'filter')}>查看候选</Button>}>{record.pending.reason}</Alert>}
     </div>
     <footer className="source-card-footer">
-      <ButtonLink icon={Pencil} size="small" variant="ghost" page="sources" id={source.id}>{source.local ? '编辑本地来源' : '编辑机场设置'}</ButtonLink>
+      <ButtonLink icon={Pencil} size="small" variant="ghost" page="sources" id={source.id}>{source.local ? '编辑本地来源' : '编辑订阅源设置'}</ButtonLink>
       <div className="row-actions"><MoveButtons index={index} count={total} onMove={move} area="source" /><IconButton icon={Trash2} className="delete-action" label={'删除 ' + source.name} onClick={() => remove([source.id])} /></div>
     </footer>
   </article>
@@ -433,36 +433,36 @@ export function SourcesPage() {
   async function importSources(event) {
     const file = event.target.files?.[0]
     event.target.value = ''
-    if (!file || !await confirm({ title: '导入机场设置？', detail: '文件中的机场会追加到当前方案。服务端会按其设置刷新。', action: '导入机场' })) return
+    if (!file || !await confirm({ title: '导入订阅源设置？', detail: '文件中的订阅源会追加到当前方案。服务端会按其设置刷新。', action: '导入订阅源' })) return
     await run('import', async () => {
       const body = JSON.parse(await file.text())
-      if (body.version !== 1) throw new Error('文件不是 SubMeld 机场设置。')
+      if (body.version !== 1) throw new Error('请选择 SubMeld 导出的订阅源设置文件。')
       applyState(await call('sources/import', { ...body, revision: state.revision }))
-      notify('机场设置已导入')
+      notify('订阅源设置已导入')
     })
   }
   const removing = remove ? sources.filter(source => remove.includes(source.id)) : []
   const impacted = remove ? [...new Set(remove.flatMap(id => sourceReferences(state.draft, id).map(group => group.name)))] : []
   return <div className="config-page stack">
     <h1 className="sr-only" tabIndex={-1}>订阅源</h1>
-    <Panel title="机场订阅源" count={formatNumber(sources.length)}
+    <Panel title="订阅源" count={formatNumber(sources.length)}
       actions={<>
         {sources.length > 0 && <Button icon={RefreshCw} size="small" busy={busy === 'refresh'} disabled={Boolean(busy) || !canRefresh} onClick={() => refresh()}>刷新全部</Button>}
-        <Button variant="primary" size="small" icon={Plus} onClick={() => navigate('sources', 'new')}>添加机场</Button>
+        <Button variant="primary" size="small" icon={Plus} onClick={() => navigate('sources', 'new')}>添加订阅源</Button>
       </>}>
       <div className="config-toolbar">
         <div className="filters">{sources.length > 0 && <>
-          <label className="page-checkbox"><Checkbox aria-label="选择当前页机场" checked={!!pageSources.length && pageSources.every(item => checked.has(item.id))} onCheckedChange={enabled => setSelected(enabled ? [...new Set([...selected, ...pageSources.map(item => item.id)])] : selected.filter(id => !pageSources.some(item => item.id === id)))} /><span>全选本页</span></label>
-          <SearchBox value={query} onChange={value => { setQuery(value); setOffset(0) }} placeholder="搜索机场名称或 Tag" />
-          <NativeSelect aria-label="机场状态" value={status} onChange={event => { setStatus(event.target.value); setOffset(0) }}>
+          <label className="page-checkbox"><Checkbox aria-label="选择当前页订阅源" checked={!!pageSources.length && pageSources.every(item => checked.has(item.id))} onCheckedChange={enabled => setSelected(enabled ? [...new Set([...selected, ...pageSources.map(item => item.id)])] : selected.filter(id => !pageSources.some(item => item.id === id)))} /><span>全选本页</span></label>
+          <SearchBox value={query} onChange={value => { setQuery(value); setOffset(0) }} placeholder="搜索订阅源名称或前缀" />
+          <NativeSelect aria-label="订阅源状态" value={status} onChange={event => { setStatus(event.target.value); setOffset(0) }}>
             <NativeSelectOption value="all">全部状态</NativeSelectOption><NativeSelectOption value="enabled">已启用</NativeSelectOption><NativeSelectOption value="disabled">已停用</NativeSelectOption><NativeSelectOption value="failed">有异常</NativeSelectOption>
           </NativeSelect></>}
         </div>
-        <div className="actions"><Input ref={importInput} type="file" accept=".json,application/json" hidden onChange={importSources} aria-label="选择机场设置文件" />
+        <div className="actions"><Input ref={importInput} type="file" accept=".json,application/json" hidden onChange={importSources} aria-label="选择订阅源设置文件" />
           <Button icon={Upload} size="small" busy={busy === 'import'} onClick={() => importInput.current.click()}>导入设置</Button>
           {sources.length > 0 && <Button icon={Download} size="small" busy={busy === 'export'} disabled={Boolean(busy)} onClick={async () => {
-            if (await confirm({ title: '导出机场设置？', detail: sources.some(source => source.local) ? '导出的文件包含本地节点的连接凭据，以及已配置的机场地址。' : '导出的文件含有原始订阅地址和令牌，请妥善保存。', action: '导出设置' })) {
-              await run('export', async () => downloadJson('SubMeld-机场设置.json', await call('sources/export')))
+            if (await confirm({ title: '导出订阅源设置？', detail: sources.some(source => source.local) ? '导出的文件包含本地节点的连接凭据，以及已配置的订阅地址。' : '导出的文件含有原始订阅地址和令牌，请妥善保存。', action: '导出设置' })) {
+              await run('export', async () => downloadJson('SubMeld-订阅源设置.json', await call('sources/export')))
             }
           }}>导出设置</Button>}
         </div>
@@ -471,14 +471,14 @@ export function SourcesPage() {
         <strong>已选 {selected.length} 项</strong><Button size="small" disabled={!selectedRemote.length} onClick={() => refresh(selectedRemote)}>刷新选中</Button>
         <Button size="small" onClick={() => editMany(selected, { enabled: true })}>启用</Button>
         <Button size="small" onClick={async () => {
-          if (await confirm({ title: '停用选中的机场？', detail: '下次发布时，订阅将移除这些机场的节点。', action: '停用机场' })) editMany(selected, { enabled: false })
+          if (await confirm({ title: '停用选中的订阅源？', detail: '下次发布时，订阅将移除这些订阅源的节点。', action: '停用订阅源' })) editMany(selected, { enabled: false })
         }}>停用</Button>
         <Button size="small" disabled={!selectedRemote.length} onClick={() => editMany(selectedRemote, { paused: true })}>暂停更新</Button>
         <Button size="small" disabled={!selectedRemote.length} onClick={() => editMany(selectedRemote, { paused: false })}>恢复更新</Button>
         <Button size="small" variant="danger" onClick={() => setRemove(selected)}>删除</Button>
         <Button size="small" variant="ghost" onClick={() => setSelected([])}>清除选择</Button>
       </div>}
-      {!visible.length && <Empty icon={Radio} title={sources.length ? '没有匹配的机场' : '还没有机场订阅'} detail={!sources.length && '添加机场后，可按地区和关键词筛选节点。'}
+      {!visible.length && <Empty icon={Radio} title={sources.length ? '没有匹配的订阅源' : '还没有订阅源'} detail={!sources.length && '添加订阅源后，可按地区和关键词筛选节点。'}
         actions={sources.length > 0 && <Button onClick={() => { setQuery(''); setStatus('all'); setOffset(0) }}>清除筛选</Button>} />}
     </Panel>
     {pageSources.map(source => <SourceCard key={source.id} source={source} stats={stats[source.id]} record={state.sources[source.id]}
@@ -486,9 +486,9 @@ export function SourcesPage() {
       onCheck={enabled => setSelected(enabled ? [...selected, source.id] : selected.filter(id => id !== source.id))} />)}
     {visible.length > 30 && <Pager offset={offset} pageSize={30} count={visible.length} onChange={setOffset} />}
     {(modalSource || route.id === 'new') && <SourceEditor key={(modalSource?.id ?? 'new') + '/' + route.detail} source={modalSource} first={route.detail} onClose={() => navigate('sources')} />}
-    {remove && <Modal title="删除机场" detail="当前成品会继续可用，移除结果需要正式发布。" onClose={() => setRemove(null)} footer={<><Button onClick={() => setRemove(null)}>取消</Button><Button variant="danger" busy={busy === 'remove'} onClick={removeSources}>确认删除</Button></>}>
+    {remove && <Modal title="删除订阅源" detail="当前成品会继续可用，移除结果需要正式发布。" onClose={() => setRemove(null)} footer={<><Button onClick={() => setRemove(null)}>取消</Button><Button variant="danger" busy={busy === 'remove'} onClick={removeSources}>确认删除</Button></>}>
       <div className="stack tight"><p>将删除 {removing.map(source => source.name).join('、')}。</p>
-        {impacted.length > 0 && <Alert tone="warning">以下代理组将移除对这些机场的成员引用。请在发布前检查剩余成员。{impacted.join('、')}</Alert>}
+        {impacted.length > 0 && <Alert tone="warning">以下代理组将移除来自这些订阅源的节点和筛选条件。请在发布前检查组内代理。{impacted.join('、')}</Alert>}
       </div>
     </Modal>}
   </div>
@@ -589,7 +589,7 @@ export function NodesPage() {
     setOffset(0)
     setSelected([])
   }
-  const scopes = [['all', '全部机场（' + countText(view.counts.nodes, view.originalNodes) + '）'],
+  const scopes = [['all', '全部订阅源（' + countText(view.counts.nodes, view.originalNodes) + '）'],
     ...view.sources.map(item => [item.id, item.name + '（' + countText(item.retained, item.original) + '）'])]
   async function setManual(keys, excluded) {
     setBusy(true)
@@ -632,7 +632,7 @@ export function NodesPage() {
         <SearchBox placeholder="搜索节点名或备注" value={query} onChange={value => { setQuery(value); setOffset(0) }} />
         <MultiSelect label="地区筛选" options={regionOptions} values={areas} onChange={value => { setAreas(value.join(',')); setOffset(0) }} placeholder="全部地区" />
       </div>}>
-      {status === 'conflicts' && nodes.length > 0 && <p className="panel-padding warning-text field-note">修改来源 Tag 或排除重名节点。切换到「全部机场」可查看跨机场冲突。</p>}
+      {status === 'conflicts' && nodes.length > 0 && <p className="panel-padding warning-text field-note">可修改名称前缀或排除重名节点。选择「全部订阅源」可查看跨来源的重名节点。</p>}
       {!!selected.length && <div className="batch-bar"><strong>已选 {selected.length} 个节点</strong>
         <Button size="small" onClick={() => setManual(selected, true)} busy={busy}>批量排除</Button>
         <Button size="small" onClick={() => setManual(selected, false)} disabled={busy}>撤销手动排除</Button>

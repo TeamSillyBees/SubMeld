@@ -191,7 +191,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
       ...Object.values(nodes).flatMap(data => data?.urls ?? []),
     ])
     if (configHasSubscriptionSecret(compiled.config, secrets)) {
-      compiled.issues.push({ severity: 'error', code: 'privacy', pane: 'sources', id: null, message: '成品配置中含有完整的机场订阅地址，或名称、Tag、规则等字段含有下载令牌。请检查后重新发布。' })
+      compiled.issues.push({ severity: 'error', code: 'privacy', pane: 'sources', id: null, message: '成品配置中含有完整的订阅地址，或名称、前缀、规则等字段含有下载令牌。请检查后重新发布。' })
     }
     const yaml = compiled.issues.some(issue => issue.severity === 'error')
       ? null
@@ -333,7 +333,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
   function sourceNodes(profileId, sourceId) {
     const profile = profileFor(profileId)
     const source = profile.draft.sources.find(entry => entry.id === sourceId)
-    if (!source) throw new UserError('未找到该机场。', 404)
+    if (!source) throw new UserError('未找到该订阅源。', 404)
     const { full } = readRecord(profile, recordFor('source', source), getAllSecrets(), true)
     return { nodesVersion: full.nodesVersion, good: full.good, candidate: full.pending?.data ?? null }
   }
@@ -387,7 +387,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
         continue
       }
       source.url ||= profile.draft.sources.find(item => item.id === source.id)?.url ?? ''
-      if (!source.url) throw new UserError('请为机场填写订阅地址。')
+      if (!source.url) throw new UserError('请为订阅源填写订阅地址。')
     }
     for (const service of draft.services.filter(service => service.provider)) {
       const fromCatalog = catalog.providers.find(item => item.id === catalogByService.get(service.id))
@@ -405,7 +405,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
       const structural = structuralGroupIssues(draft)
       if (structural.size) throw new UserError([...structural.values()][0], 422, { id: [...structural.keys()][0] })
       const removedGroups = new Set(profile.draft.groups.filter(previous => !draft.groups.some(group => group.id === previous.id)).map(group => group.id))
-      if (draft.services.some(service => removedGroups.has(service.target))) throw new UserError('代理组仍被分流规则使用，请先迁移引用。', 422)
+      if (draft.services.some(service => removedGroups.has(service.target))) throw new UserError('代理组仍被路由规则使用，请先迁移引用。', 422)
       const localData = new Map()
       for (const source of draft.sources.filter(entry => entry.local)) {
         const saved = store.get(dataSpace(profile), datasetKey('source', source))?.good
@@ -646,10 +646,10 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
       return mutate(() => {
         const profile = profileFor(profileId)
         const entry = profile.draft.sources.find(source => source.id === sourceId)
-        if (!entry) throw new UserError('未找到该机场。', 404)
+        if (!entry) throw new UserError('未找到该订阅源。', 404)
         const key = datasetKey('source', entry)
         const record = store.get(dataSpace(profile), key)
-        if (!record?.pending) throw new UserError('该机场当前没有候选结果。', 404)
+        if (!record?.pending) throw new UserError('该订阅源当前没有候选结果。', 404)
         record.pending.accepted = accept
         profile.revision++
         store.transaction(() => {
@@ -785,7 +785,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
       const profile = profileFor(profileId)
       const originals = read(z.array(sourceSchema).max(200), body.sources)
       const sources = originals.map(source => ({ ...source, id: randomUUID() }))
-      if (sources.some(source => !source.local && !source.url)) throw new UserError('文件有机场缺少有效订阅地址。')
+      if (sources.some(source => !source.local && !source.url)) throw new UserError('文件中的订阅源缺少有效订阅地址。')
       const localNodes = Object.fromEntries(sources.flatMap((source, i) => source.local ? [[source.id, body.localNodes?.[originals[i].id]]] : []))
       return saveDraft(profileId, owner, { revision: body.revision, localNodes, draft: { ...profile.draft, sources: [...profile.draft.sources, ...sources] } })
     },

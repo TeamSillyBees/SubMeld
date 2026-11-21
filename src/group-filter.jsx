@@ -22,12 +22,12 @@ export function GroupFilter({ member, index, sources, nodes, onChange, onNew, he
   }
   return <section className="group-filter">
     <div className="filter-editor-heading">
-      <h3 ref={headingRef} tabIndex={-1}><Filter aria-hidden="true" />{member ? '动态筛选 · 成员 #' + (index + 1) : '新建动态筛选'}</h3>
+      <h3 ref={headingRef} tabIndex={-1}><Filter aria-hidden="true" />{member ? '动态筛选 · 列表第 ' + (index + 1) + ' 项' : '新建动态筛选'}</h3>
       {member && <Button size="small" icon={Plus} variant="ghost" onClick={() => { setOffset(0); setExpanded(false); onNew() }}>另加一条筛选</Button>}
     </div>
-    <p className="field-note muted">{member ? '同时匹配来源、地区和名称的节点会加入本组。发布后，成员随订阅更新。' : '选择来源、地区或填写正则，即可添加动态筛选并预览成员。'}</p>
+    <p className="field-note muted">{member ? '订阅更新时，同时匹配来源、地区和名称的节点会加入本组。' : '选择来源、地区或填写正则，即可预览匹配的节点。'}</p>
     <div className="group-filter-columns">
-      <FieldSet className="pool-sources"><FieldLegend variant="label">订阅来源</FieldLegend>
+      <FieldSet className="pool-sources"><FieldLegend variant="label">订阅源</FieldLegend>
         {sources.length ? <div className="pool-source-list">{sources.map(source => <CheckOption key={source.id} label={source.name}
           checked={value.sourceIds.includes(source.id)} onCheckedChange={() => change('sourceIds', toggleValue(value.sourceIds, source.id))} />)}</div>
           : <p className="field-note muted">暂无订阅源</p>}
@@ -46,7 +46,7 @@ export function GroupFilter({ member, index, sources, nodes, onChange, onNew, he
           value={value.includeRegex} placeholder="例如 IEPL|专线|家宽" onChange={event => change('includeRegex', event.target.value)} /></Field>
         <Field label="排除正则（可选）" error={filter.excludeError}><Input spellCheck={false}
           value={value.excludeRegex} placeholder="例如 测试|过期" onChange={event => change('excludeRegex', event.target.value)} /></Field>
-        <p className="field-note muted">按节点名（含 Tag）匹配，命中排除正则时跳过。使用 RE2 语法，默认忽略大小写。</p>
+        <p className="field-note muted">按节点名（含前缀）匹配，命中排除正则时跳过。使用 RE2 语法，默认忽略大小写。</p>
       </div>
     </div>
     <div className="pool-preview">

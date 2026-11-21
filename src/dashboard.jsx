@@ -6,7 +6,7 @@ import { useProject } from './project.jsx'
 import { Alert, Badge, Button, ButtonLink, CopyLinkButton, Empty, Panel, RouteLink, SourceStatus, TimeLabel, formatNumber, formatTime, versionKind, versionLabel } from './ui.jsx'
 
 const stages = [
-  ['sources', '启用机场'],
+  ['sources', '已启用订阅源'],
   ['nodes', '保留节点'],
   ['groups', '启用代理组'],
   ['rules', '有效规则'],
@@ -35,12 +35,12 @@ function Metrics({ state, view }) {
   const { counts, originalNodes } = view
   const live = Boolean(state.current && state.hasLink)
   return <section className="metric-grid" aria-label="配置概况">
-    <Metric page="sources" icon={Server} label="上游机场"
+    <Metric page="sources" icon={Server} label="订阅源"
       value={formatNumber(counts.sources) + '/' + formatNumber(state.draft.sources.length)} detail={'启用 · ' + formatNumber(originalNodes) + ' 节点'} />
-    <Metric page="nodes" icon={Filter} label="节点筛选池" value={formatNumber(counts.nodes)}
+    <Metric page="nodes" icon={Filter} label="节点保留比例" value={formatNumber(counts.nodes)}
       detail={'/ ' + formatNumber(originalNodes)} percent={originalNodes ? Math.round(100 * counts.nodes / originalNodes) : null} />
-    <Metric page="groups" icon={GitFork} label="策略与路由" value={formatNumber(counts.groups) + ' 组'} detail={'· ' + formatNumber(counts.rules) + ' 规则'} />
-    <Metric page="publish" icon={Activity} label="FlClash 订阅" live={live}
+    <Metric page="groups" icon={GitFork} label="代理组与规则" value={formatNumber(counts.groups) + ' 组'} detail={'· ' + formatNumber(counts.rules) + ' 规则'} />
+    <Metric page="publish" icon={Activity} label="订阅版本" live={live}
       value={versionLabel(state.current)} detail={live ? '可拉取' : state.current ? '链接已撤销' : null} />
   </section>
 }
@@ -90,7 +90,7 @@ function RenewalReminders({ state }) {
 
   const visible = upcoming.filter(item => shown.includes(reminderKey(item)))
   if (!visible.length) return null
-  const title = visible.length > 1 ? '机场续费提醒 · ' + visible.length + ' 个机场' : '机场续费提醒'
+  const title = visible.length > 1 ? '订阅续费提醒 · ' + visible.length + ' 个订阅源' : '订阅续费提醒'
   return <Alert tone="warning" title={title} action={<Button size="small" variant="ghost" onClick={() => setShown([])}>知道了</Button>}>
     <ul className="renewal-list">{visible.map(item => <li key={item.id}>
       <RouteLink page="sources" id={item.id} detail="renewal">{item.name}</RouteLink>
@@ -111,22 +111,22 @@ function SubscriptionPanel({ state, view }) {
     heading = '当前成品 ' + versionLabel(version)
     description = <>{versionKind(version)} · <TimeLabel value={version.at} /></>
   } else if (firstSource) {
-    heading = '添加第一条机场订阅'
-    description = '测试机场地址，选出要保留的节点。'
-    action = <ButtonLink page="sources" id="new" icon={Plus} variant="primary">添加机场</ButtonLink>
+    heading = '添加第一个订阅源'
+    description = '测试订阅地址，选出要保留的节点。'
+    action = <ButtonLink page="sources" id="new" icon={Plus} variant="primary">添加订阅源</ButtonLink>
   } else if (view.counts.nodes) {
     heading = '发布首个订阅'
-    description = '发布后即可在 FlClash 中添加私有订阅链接。'
+    description = '发布后可复制私有订阅链接。'
     action = <ButtonLink page="publish" icon={ArrowRight} variant="primary">检查与发布</ButtonLink>
   } else {
     const fetching = Object.values(state.sources).some(record => record.status === 'running' || record.status === 'queued')
     heading = fetching ? '正在获取节点' : '暂无可用节点'
-    description = fetching ? '获取完成后可筛选节点并发布。' : '请检查机场状态和节点筛选条件。'
+    description = fetching ? '获取完成后可筛选节点并发布。' : '请检查订阅源状态和节点筛选条件。'
     action = <ButtonLink page="sources" icon={Server} variant="primary">查看订阅源</ButtonLink>
   }
 
   return <Panel className="subscription-panel"
-    title={<span className="panel-title-line">FlClash 订阅入口
+    title={<span className="panel-title-line">订阅链接
       {version && <Badge className="mono" tone={live ? 'success' : 'neutral'}>{live ? 'LIVE ' + versionLabel(version) : '已撤销'}</Badge>}</span>}
     actions={live && <span className="privacy-label"><ShieldCheck aria-hidden="true" />令牌已隐藏</span>}
     footer={<>
@@ -179,7 +179,7 @@ function RefreshPanel({ state }) {
     try {
       if (all) await call('refresh', {})
       await reload()
-      notify(all ? '已请求刷新全部机场' : '状态已更新')
+      notify(all ? '已请求刷新全部订阅源' : '状态已更新')
     } catch (error) { notify(error.message, 'danger') }
     finally { setBusy('') }
   }
@@ -187,7 +187,7 @@ function RefreshPanel({ state }) {
   return <Panel title="刷新状态" actions={<Badge tone={tone}>{status}</Badge>}
     footer={<>
       <Button icon={RefreshCw} busy={busy === 'status'} disabled={Boolean(busy)} onClick={() => refresh(false)}>刷新状态</Button>
-      <Button icon={RefreshCw} busy={busy === 'all'} disabled={Boolean(busy) || !canRefresh || active > 0} onClick={() => refresh(true)}>更新全部机场</Button>
+      <Button icon={RefreshCw} busy={busy === 'all'} disabled={Boolean(busy) || !canRefresh || active > 0} onClick={() => refresh(true)}>更新全部订阅源</Button>
     </>}>
     <div className="refresh-body">
       <dl className="refresh-times">
@@ -202,7 +202,7 @@ function RefreshPanel({ state }) {
 
 function SourcesPanel({ state, view }) {
   const stats = new Map(view.sources.map(source => [source.id, source]))
-  return <Panel title="机场节点占比" className="source-share-panel" actions={<RouteLink page="sources" className="panel-link">管理全部 <ArrowRight aria-hidden="true" /></RouteLink>}>
+  return <Panel title="订阅源节点保留比例" className="source-share-panel" actions={<RouteLink page="sources" className="panel-link">管理全部 <ArrowRight aria-hidden="true" /></RouteLink>}>
     {state.draft.sources.length ? <ul className="source-shares">{state.draft.sources.slice(0, 6).map(source => {
       const { retained, original } = stats.get(source.id)
       const record = state.sources[source.id]
@@ -216,7 +216,7 @@ function SourcesPanel({ state, view }) {
         <span className="source-ratio mono">{formatNumber(retained)}/{formatNumber(original)}</span>
         <ButtonLink page="sources" id={source.id} detail="filter" icon={SlidersHorizontal} size="small" aria-label={'筛选 ' + source.name}>筛选</ButtonLink>
       </li>
-    })}</ul> : <Empty icon={Server} title="尚未添加订阅源" detail="添加机场后，可在此查看节点保留比例。" />}
+    })}</ul> : <Empty icon={Server} title="尚未添加订阅源" detail="添加订阅源后，可在此查看节点保留比例。" />}
   </Panel>
 }
 
@@ -226,7 +226,7 @@ function PreflightPanel({ state, view }) {
   const checks = [
     { page: 'nodes', label: '保留节点', value: formatNumber(counts.nodes) + ' 个节点', panes: ['sources', 'nodes'] },
     { page: 'groups', label: '代理组', value: formatNumber(counts.groups) + ' 个启用', panes: ['groups'] },
-    { page: 'rules', label: '分流规则', value: formatNumber(counts.rules) + ' 条有效', panes: ['rules'] },
+    { page: 'rules', label: '路由规则', value: formatNumber(counts.rules) + ' 条有效', panes: ['rules'] },
     { page: 'settings', label: '基础配置', value: dns.enabled ? dns.mode : 'DNS 已关闭', panes: ['settings'] },
   ]
   const errors = issues.filter(issue => issue.severity === 'error').length

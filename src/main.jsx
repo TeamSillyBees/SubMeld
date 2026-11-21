@@ -29,7 +29,7 @@ const pages = [
   ['sources', '订阅源', Server, SourcesPage],
   ['nodes', '节点管理', Filter, NodesPage],
   ['groups', '代理组', Layers3, GroupsPage],
-  ['rules', '分流规则', GitFork, RulesPage],
+  ['rules', '路由规则', GitFork, RulesPage],
   ['settings', '基础设置', Settings2, SettingsPage],
   ['publish', '配置发布', Send, PublishPage],
   ['updates', '更新记录', History, UpdatesPage],
@@ -53,7 +53,7 @@ function routeFromHash(hash = location.hash) {
 function Brand() {
   return <span className="brand" translate="no">
     <img className="brand-symbol" src="/assets/submeld-logo.svg" alt="" width={32} height={32} />
-    <span className="brand-type"><strong>SubMeld</strong><small>FlClash Console</small></span>
+    <strong className="brand-type">SubMeld</strong>
   </span>
 }
 

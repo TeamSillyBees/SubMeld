@@ -10,7 +10,7 @@ import { Alert, Badge, Button, ButtonLink, CopyLinkButton, Disclosure, Empty, Is
 
 function MembersPreview({ members }) {
   const [offset, setOffset] = usePage(members.length, 20)
-  return <Disclosure compact title={formatNumber(members.length) + ' 个成员'}>
+  return <Disclosure compact title={formatNumber(members.length) + ' 项代理'}>
     <ol className="compact-list" start={offset + 1}>{members.slice(offset, offset + 20).map(member => <li key={member.key}>{member.name}</li>)}</ol>
     {members.length > 20 && <Pager offset={offset} pageSize={20} count={members.length} onChange={setOffset} />}
   </Disclosure>
@@ -20,7 +20,7 @@ function VisualPreview({ projection }) {
   const [tabName, setTab] = useSearchValue('tab', 'nodes')
   const tab = ['groups', 'rules'].includes(tabName) ? tabName : 'nodes'
   const [query, setQuery] = useSearchValue('q')
-  const options = [['nodes', '保留节点'], ['groups', '代理组'], ['rules', '分流规则']]
+  const options = [['nodes', '保留节点'], ['groups', '代理组'], ['rules', '路由规则']]
   const all = projection[tab] ?? []
   const rows = all.filter(item => (tab === 'nodes' ? item.kept : tab === 'groups' ? item.enabled : true)
     && [item.name, item.sourceName, item.value, item.service, item.outlet].some(value => searchable(value, query)))
@@ -29,16 +29,16 @@ function VisualPreview({ projection }) {
     <div className="filters panel-padding"><Segmented items={options} label="配置预览内容" value={tab} onChange={value => { setTab(value); setOffset(0) }} />
       <SearchBox placeholder="搜索预览结果" value={query} onChange={value => { setQuery(value); setOffset(0) }} /></div>
     {!rows.length ? <Empty title="此视图没有匹配项" /> : <>
-        {tab === 'nodes' && <Table className="mobile-table" scrollLabel="保留节点预览"><TableHeader><TableRow><TableHead>节点名称</TableHead><TableHead>机场</TableHead><TableHead>地区</TableHead><TableHead>协议</TableHead></TableRow></TableHeader><TableBody>
-          {rows.slice(offset, offset + 20).map(row => <TableRow key={row.key}><TableCell className="table-row-title"><NodeNames row={row} /></TableCell><TableCell mobileLabel="机场">{row.sourceName}</TableCell><TableCell mobileLabel="地区">{regionLabel(row.region)}</TableCell><TableCell className="mono" mobileLabel="协议">{row.type.toUpperCase()}</TableCell></TableRow>)}
+        {tab === 'nodes' && <Table className="mobile-table" scrollLabel="保留节点预览"><TableHeader><TableRow><TableHead>节点名称</TableHead><TableHead>订阅源</TableHead><TableHead>地区</TableHead><TableHead>协议</TableHead></TableRow></TableHeader><TableBody>
+          {rows.slice(offset, offset + 20).map(row => <TableRow key={row.key}><TableCell className="table-row-title"><NodeNames row={row} /></TableCell><TableCell mobileLabel="订阅源">{row.sourceName}</TableCell><TableCell mobileLabel="地区">{regionLabel(row.region)}</TableCell><TableCell className="mono" mobileLabel="协议">{row.type.toUpperCase()}</TableCell></TableRow>)}
         </TableBody></Table>}
-        {tab === 'groups' && <Table className="mobile-table" scrollLabel="代理组预览"><TableHeader><TableRow><TableHead>代理组</TableHead><TableHead>类型</TableHead><TableHead>实际成员（按顺序）</TableHead></TableRow></TableHeader><TableBody>
+        {tab === 'groups' && <Table className="mobile-table" scrollLabel="代理组预览"><TableHeader><TableRow><TableHead>代理组</TableHead><TableHead>类型</TableHead><TableHead>组内代理（按顺序）</TableHead></TableRow></TableHeader><TableBody>
           {rows.slice(offset, offset + 20).map(group => <TableRow key={group.id}><TableCell className="table-row-title"><strong>{group.name}</strong></TableCell><TableCell className="mono" mobileLabel="类型">{group.type}</TableCell>
-            <TableCell mobileLabel="实际成员"><MembersPreview members={group.members} /></TableCell></TableRow>)}
+            <TableCell mobileLabel="组内代理"><MembersPreview members={group.members} /></TableCell></TableRow>)}
         </TableBody></Table>}
-        {tab === 'rules' && <Table className="mobile-table" scrollLabel="分流规则预览"><TableHeader><TableRow><TableHead>优先级</TableHead><TableHead>服务</TableHead><TableHead>条件</TableHead><TableHead>出口</TableHead></TableRow></TableHeader><TableBody>
+        {tab === 'rules' && <Table className="mobile-table" scrollLabel="路由规则预览"><TableHeader><TableRow><TableHead>优先级</TableHead><TableHead>服务</TableHead><TableHead>条件</TableHead><TableHead>出站策略</TableHead></TableRow></TableHeader><TableBody>
           {rows.slice(offset, offset + 20).map(rule => <TableRow key={rule.id}><TableCell className="numeric" mobileLabel="优先级">{rule.position}</TableCell><TableCell mobileLabel="服务">{rule.service}</TableCell>
-            <TableCell mobileLabel="匹配条件"><strong>{ruleTypes[rule.type]?.[0] ?? rule.type}</strong>{rule.type !== 'RULE-SET' && <small className="muted">{rule.value}</small>}</TableCell><TableCell mobileLabel="出口">{rule.outlet}</TableCell></TableRow>)}
+            <TableCell mobileLabel="匹配条件"><strong>{ruleTypes[rule.type]?.[0] ?? rule.type}</strong>{rule.type !== 'RULE-SET' && <small className="muted">{rule.value}</small>}</TableCell><TableCell mobileLabel="出站策略">{rule.outlet}</TableCell></TableRow>)}
         </TableBody></Table>}
       {rows.length > 20 && <Pager offset={offset} pageSize={20} count={rows.length} onChange={setOffset} />}
     </>}
@@ -50,7 +50,6 @@ function PublishedVersion({ state, download, heading }) {
     <div className="summary-copy">
       <h2 id="release-version-title" ref={heading} tabIndex={-1}>当前成品 <span className="mono">{versionLabel(state.current)}</span></h2>
       <p>{versionKind(state.current)} · <TimeLabel value={state.current.at} />{!state.hasLink && ' · 私有链接已撤销'}</p>
-      {state.hasLink && <p>在 FlClash 中更新订阅以应用成品。</p>}
     </div>
     <div className="actions">
       <ButtonRoot asChild variant="outline"><a href={download} download><Download data-icon="inline-start" aria-hidden="true" />下载完整配置</a></ButtonRoot>
@@ -109,8 +108,7 @@ export function PublishPage() {
     } catch (error) { setError(error.message) } finally { setBusy('') }
   }
   async function publish() {
-    const outcome = state.revoked ? '本次配置将成为当前成品。'
-      : state.current ? '私有订阅链接将提供本次配置。' : '可将私有订阅链接添加到 FlClash。'
+    const outcome = state.revoked ? '本次配置将成为当前成品。' : '私有订阅链接将提供本次配置。'
     const detail = (warnings ? `配置检查有 ${formatNumber(warnings)} 项提醒。` : '') + '通过 Mihomo 校验后，' + outcome
     if (!await confirm({ title: '发布配置？', detail, action: '确认发布' })) return
     setBusy('publish')
@@ -193,7 +191,7 @@ export function PublishPage() {
         </div>}
       </>}
     </Panel>}
-    {target && <Modal title={'回滚至 ' + versionLabel(target)} detail="订阅链接保持有效，FlClash 可在下一次更新时获取回滚内容。"
+    {target && <Modal title={'回滚至 ' + versionLabel(target)} detail="回滚后，订阅将提供所选版本的配置。"
       onClose={() => !busy && setTarget(null)} footer={<><Button onClick={() => setTarget(null)} disabled={Boolean(busy)}>取消</Button><Button variant="primary" icon={RotateCcw} busy={busy === 'rollback'} onClick={rollback}>确认回滚</Button></>}>
       <div className="stack tight"><p>{formatTime(target.at)} · {target.counts.nodes} 个节点 · {target.counts.groups} 个代理组 · {target.counts.rules} 条规则</p>
         <Alert>回滚会建立一条版本记录。再次发布配置后，订阅将恢复自动更新。</Alert></div>
@@ -241,9 +239,9 @@ export function UpdatesPage() {
   }
   return <div className="stack">
     <PageTitle title="更新记录"
-      actions={reports.length > 0 && <Button icon={RefreshCw} variant="primary" busy={busy === 'all'} disabled={Boolean(busy) || !canRefresh} onClick={() => refresh()}>刷新全部机场</Button>} />
-    <Panel title="机场刷新状态">
-      {!reports.length ? <Empty icon={Radio} title="暂无机场" actions={<Button onClick={() => navigate('sources', 'new')}>添加机场</Button>} /> :
+      actions={reports.length > 0 && <Button icon={RefreshCw} variant="primary" busy={busy === 'all'} disabled={Boolean(busy) || !canRefresh} onClick={() => refresh()}>刷新全部订阅源</Button>} />
+    <Panel title="订阅源刷新状态">
+      {!reports.length ? <Empty icon={Radio} title="暂无订阅源" actions={<Button onClick={() => navigate('sources', 'new')}>添加订阅源</Button>} /> :
       <div className="group-list">{reports.map(source => {
         const record = state.sources[source.id]
         return <article className="group-row refresh-row" key={source.id}>
@@ -277,7 +275,7 @@ export function UpdatesPage() {
           actions={records.length > 0 && <Button onClick={() => { setQuery(''); setStatus('all') }}>清除筛选</Button>} /> :
         <Table className="mobile-table" scrollLabel="刷新历史"><TableHeader><TableRow><TableHead>来源</TableHead><TableHead>时间 / 触发方式</TableHead><TableHead>结果</TableHead><TableHead>变化</TableHead><TableHead>操作</TableHead></TableRow></TableHeader><TableBody>
           {visible.map(record => <TableRow key={record.id}>
-            <TableCell className="table-row-title"><strong>{record.name}</strong><small className="muted">{record.kind === 'provider' ? '规则集' : '机场'}</small></TableCell>
+            <TableCell className="table-row-title"><strong>{record.name}</strong><small className="muted">{record.kind === 'provider' ? '规则集' : '订阅源'}</small></TableCell>
             <TableCell mobileLabel="时间"><TimeLabel value={record.at} /><small className="muted">{({ manual: '手动', schedule: '定时', probe: '测试并保存', import: '本地导入' })[record.trigger]}</small></TableCell>
             <TableCell mobileLabel="结果"><Badge tone={record.outcome === 'success' ? 'success' : 'danger'} dot>{record.outcome === 'success' ? '成功' : record.usedOld ? '失败 · 使用旧数据' : '失败'}</Badge>{record.outcome !== 'success' && <small className="muted text-limit">{record.message}</small>}</TableCell>
             <TableCell className="numeric" mobileLabel="变化">{record.diff ? record.diff.before + ' → ' + record.diff.after : '—'}</TableCell>

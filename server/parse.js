@@ -288,11 +288,11 @@ export function parseSource(bytes, urls) {
       entries = Array.isArray(config) ? config : config?.proxies
       providers = Object.keys(config?.['proxy-providers'] ?? {})
       if (!Array.isArray(entries)) {
-        throw new UserError(providers.length ? '订阅仅提供外部代理集合，当前需要直接包含节点的机场订阅。' : '无法识别订阅格式，请选择 Mihomo/Clash YAML 或节点分享链接。')
+        throw new UserError(providers.length ? '订阅仅提供外部代理集合，当前需要直接包含节点的订阅。' : '无法识别订阅格式，请选择 Mihomo/Clash YAML 或节点分享链接。')
       }
     }
   }
-  if (entries.length > MAX_NODES) throw new UserError('单个机场最多支持 16,000 个节点。')
+  if (entries.length > MAX_NODES) throw new UserError('单个订阅源最多支持 16,000 个节点。')
   const nodes = []
   const secrets = subscriptionSecrets(urls)
   const rejected = providers.map((_, index) => ({ item: '代理集合 ' + (index + 1), reason: '集合中的外部代理未导入，请使用直接包含节点的订阅。' }))

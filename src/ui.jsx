@@ -348,13 +348,13 @@ export function MoveButtons({ index, count, onMove, area = 'items', drag = true 
   </span>
 }
 
-export function OutletSelect({ groups, value, onChange, disabled, className, label = '目标出口', ...props }) {
+export function OutletSelect({ groups, value, onChange, disabled, className, label = '出站策略', ...props }) {
   return <NativeSelect className={className} aria-label={props.id ? undefined : label} name={label} disabled={disabled}
     value={value} onChange={event => onChange(event.target.value)} {...props}>
-    <NativeSelectOption value="">请选择出口</NativeSelectOption>
-    <NativeSelectOptGroup label="内置出口">{Object.entries(builtins).map(([key, text]) => <NativeSelectOption key={key} value={key}>{text} / {key}</NativeSelectOption>)}</NativeSelectOptGroup>
+    <NativeSelectOption value="">选择代理组或内置策略</NativeSelectOption>
+    <NativeSelectOptGroup label="内置代理策略">{Object.entries(builtins).map(([key, text]) => <NativeSelectOption key={key} value={key}>{key} · {text}</NativeSelectOption>)}</NativeSelectOptGroup>
     <NativeSelectOptGroup label="代理组">{groups.map(group => <NativeSelectOption disabled={!group.enabled} key={group.id} value={group.id}>{group.name}{group.enabled ? '' : '（已停用）'}</NativeSelectOption>)}</NativeSelectOptGroup>
-    {value && !Object.hasOwn(builtins, value) && !groups.some(group => group.id === value) && <NativeSelectOption value={value} disabled>出口已不存在</NativeSelectOption>}
+    {value && !Object.hasOwn(builtins, value) && !groups.some(group => group.id === value) && <NativeSelectOption value={value} disabled>已删除的代理组</NativeSelectOption>}
   </NativeSelect>
 }
 

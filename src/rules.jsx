@@ -16,7 +16,7 @@ const newProvider = () => ({ url: '', behavior: 'classical', format: 'yaml', min
 const noResolveTypes = new Set(['IP-CIDR', 'IP-CIDR6', 'GEOIP', 'RULE-SET'])
 
 function outletName(service, groups) {
-  return builtins[service.target] ?? groups.find(group => group.id === service.target)?.name ?? '出口不可用'
+  return builtins[service.target] ?? groups.find(group => group.id === service.target)?.name ?? '出站策略不可用'
 }
 
 function rulesWithService(all, serviceId, entries) {
@@ -92,7 +92,7 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }) {
   const serviceName = form.name.trim() || (quick ? suggestedName : '')
   const preset = servicePresets.find(preset => preset.id === form.preset?.id)
   const changed = JSON.stringify(initial) !== JSON.stringify(form) || JSON.stringify(entries) !== JSON.stringify(rules) || Boolean(paste)
-  const guard = useUnsavedChanges(changed, '出口和分流规则将恢复为修改前的设置。')
+  const guard = useUnsavedChanges(changed, '出站策略和路由规则将恢复为修改前的设置。')
   const nameInput = useRef(null)
   const valueInput = useRef(null)
   const browseOnClose = useRef(false)
@@ -156,7 +156,7 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }) {
       return
     }
     if (!form.target) {
-      setInvalidField({ name: 'target', message: '请选择目标出口。' })
+      setInvalidField({ name: 'target', message: '请选择出站策略。' })
       document.querySelector('[name="service_outlet"]')?.focus()
       return
     }
@@ -184,7 +184,7 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }) {
   const browseSets = !exists && <Button variant="ghost" size="small" disabled={Boolean(busy)} onClick={() => guard.close(() => {
     browseOnClose.current = true
     onClose()
-  })}>搜索内置规则集</Button>
+  })}>搜索规则集目录</Button>
   if (quick) {
     const [, hint, example] = ruleTypes[firstRule.type]
     const formId = 'manual-rule-' + form.id
@@ -193,7 +193,7 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }) {
       <form id={formId} className="quick-rule-form" onSubmit={event => { event.preventDefault(); void commit() }}>
         {error && <Alert tone="danger">{error}</Alert>}
         <fieldset disabled={Boolean(busy)} className="quick-rule-fields">
-          <legend className="sr-only">设置匹配条件和出口</legend>
+          <legend className="sr-only">设置匹配条件和出站策略</legend>
           <Field label="匹配方式"><NativeSelect value={firstRule.type} onChange={event => {
             updateRow(0, { type: event.target.value, value: '', noResolve: false }); setInvalidField(null)
           }}>{Object.entries(ruleTypes).filter(([type]) => type !== 'RULE-SET').map(([type, [name]]) =>
@@ -203,7 +203,7 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }) {
               <Input ref={valueInput} value={firstRule.value} maxLength={2048} spellCheck={false} placeholder={example} onChange={event => {
                 updateRow(0, { value: event.target.value }); setInvalidField(null)
               }} /></Field>}
-          <Field label="目标出口" name="service_outlet" error={invalidField?.name === 'target' ? invalidField.message : undefined}>
+          <Field label="出站策略" name="service_outlet" error={invalidField?.name === 'target' ? invalidField.message : undefined}>
             <OutletSelect value={form.target} onChange={value => update('target', value)} groups={state.draft.groups} /></Field>
         </fieldset>
         {firstRule.type !== 'MATCH' && <p className="field-note muted">{hint}</p>}
@@ -224,7 +224,7 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }) {
         <Field label="服务名称" name="service_name" error={invalidField?.name === 'name' ? invalidField.message : undefined}>
           <Input ref={nameInput} value={form.name} maxLength={256} onChange={event => update('name', event.target.value)} placeholder="例如 GitHub…" />
         </Field>
-        <Field label="目标出口" name="service_outlet" error={invalidField?.name === 'target' ? invalidField.message : undefined}><OutletSelect groups={state.draft.groups} value={form.target} onChange={value => update('target', value)} /></Field>
+        <Field label="出站策略" name="service_outlet" error={invalidField?.name === 'target' ? invalidField.message : undefined}><OutletSelect groups={state.draft.groups} value={form.target} onChange={value => update('target', value)} /></Field>
       </FieldGroup>
       <Toggle label="启用服务" detail="停用后，服务的所有规则从新成品中移除。" checked={form.enabled} onChange={value => update('enabled', value)} />
       {preset && <div className="between flex-wrap field-note">
@@ -236,7 +236,7 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }) {
         }}>添加新版域名</Button>}
       </div>}
       {form.inlineRules ? <Disclosure title={'内嵌规则集 · ' + formatNumber(form.inlineRules.length) + ' 条'} defaultOpen={!exists}>
-        <Field label="规则集条目" hint="每行填写匹配方式和值，例如 DOMAIN-SUFFIX,example.com。整组使用上方选定的出口。">
+        <Field label="规则集条目" hint="每行填写匹配方式和值，例如 DOMAIN-SUFFIX,example.com。这些条目共用上方的出站策略。">
           <Textarea rows={10} spellCheck={false} defaultValue={form.inlineRules.join('\n')}
             onChange={event => update('inlineRules', event.target.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean))} />
         </Field>
@@ -341,7 +341,7 @@ function MatchForm({ buildDraft, serviceId, disabled, changedKey, onOpen, exampl
       <div className="match-query"><Field label="测试域名" name="domain"><Input spellCheck={false} placeholder="例如 api.github.com" value={domain} onChange={event => { submitted.current = ''; setDomain(event.target.value); clearResult() }} /></Field>
         <Button type="submit" size="small" variant="primary" icon={Search} busy={busy} disabled={disabled || (!buildDraft && !domain.trim())}>{buildDraft ? '检查并测试' : '测试域名'}</Button></div>
       {examples.length > 0 && <div className="domain-examples">{examples.map(value => <button key={value} type="button" aria-label={'测试 ' + value} onClick={() => testDomain(value)}>{value}</button>)}</div>}
-      {buildDraft && <span className="muted">可以留空检查规则。填写域名还可查看预计出口。</span>}
+      {buildDraft && <span className="muted">可以留空检查规则。填写域名还可查看预计命中的出站策略。</span>}
       {buildDraft && result?.issues?.length > 0 && result.issues.map((issue, index) => <Alert key={index} tone={issue.severity === 'error' ? 'danger' : 'warning'}>{issue.message}</Alert>)}
       {result?.error ? <Alert tone="danger">{result.error}</Alert> : result?.checkedOnly ? (!result.issues.length && <Alert tone="success">未发现此服务有明显的规则冲突。</Alert>) : result && <>
         {result.message && <Alert tone="warning">{result.message}</Alert>}
@@ -351,13 +351,13 @@ function MatchForm({ buildDraft, serviceId, disabled, changedKey, onOpen, exampl
         </Alert>}
         {result.match ? <div className="match-result" role="status">
           <div className="match-path"><code>{result.domain}</code><ArrowRight aria-hidden="true" /><span className="tech-chip">#{result.match.position} {result.match.type}</span><ArrowRight aria-hidden="true" /><Badge tone="accent">{result.match.outlet}</Badge></div>
-          <div><strong>{result.uncertain.length ? '若上述条件未命中，将匹配' : '预计命中'}：{result.match.service}</strong><p>第 {formatNumber(result.match.position)} 条，出口 {result.match.outlet}</p></div>
-          {outletGroup?.members.length > 0 && <div className="match-members"><span>出口成员（{formatNumber(outletGroup.members.length)}）</span>
+          <div><strong>{result.uncertain.length ? '若上述条件未命中，将匹配' : '预计命中'}：{result.match.service}</strong><p>第 {formatNumber(result.match.position)} 条，出站策略为 {result.match.outlet}</p></div>
+          {outletGroup?.members.length > 0 && <div className="match-members"><span>组内代理（{formatNumber(outletGroup.members.length)}）</span>
             <div className="chips">{outletGroup.members.slice(0, 6).map(member => <code key={member.key} className="tech-chip">{member.name}</code>)}
-              {outletGroup.members.length > 6 && <RouteLink className="text-link" page="groups" id={outletGroup.id}>查看其余 {formatNumber(outletGroup.members.length - 6)} 个成员</RouteLink>}
+              {outletGroup.members.length > 6 && <RouteLink className="text-link" page="groups" id={outletGroup.id}>查看其余 {formatNumber(outletGroup.members.length - 6)} 项代理</RouteLink>}
             </div></div>}
           {onOpen && <Button size="small" onClick={() => onOpen(result.match)}>打开规则</Button>}
-        </div> : !result.message && <Alert>没有可确定命中的规则。实际出口由客户端运行模式和网络条件决定。</Alert>}
+        </div> : !result.message && <Alert>没有可确定命中的规则。实际出站策略取决于运行模式和网络条件。</Alert>}
       </>}
     </form>
 }
@@ -518,7 +518,7 @@ export function RulesPage() {
 
   const examples = [...new Set(services.map(service => rulesByService.get(service.id).find(rule => rule.enabled && ['DOMAIN', 'DOMAIN-SUFFIX'].includes(rule.type))?.value).filter(Boolean))].slice(0, 6)
   return <div className="stack config-page">
-    <h1 className="sr-only" tabIndex={-1}>分流规则</h1>
+    <h1 className="sr-only" tabIndex={-1}>路由规则</h1>
     <section ref={pickerSection} className="rule-section"><RuleSetPicker groups={draft.groups} added={addedSets} busy={busy}
       onAdd={addRuleSet} onEdit={id => navigate('rules', id)} onManual={() => addService()} onCustom={() => addService(newProvider())}
       onPaste={() => {
@@ -526,15 +526,15 @@ export function RulesPage() {
         setEditing({ service, entries: [newRule(service.id, 'RULE-SET')] })
       }} /></section>
     <div className="routing-workspace">
-      <Panel title="服务出口分配" count={formatNumber(services.length)}>
+      <Panel title="服务出站策略" count={formatNumber(services.length)}>
         {(query || outlet || status !== 'all') && <div className="config-toolbar"><span>筛选后 {formatNumber(visibleServices.length)} 个服务</span><Button size="small" onClick={clearFilters}>清除筛选</Button></div>}
         {!!selected.length && <div className="batch-bar"><strong>已选 {selected.length} 个服务</strong>
           <Button size="small" busy={busy} onClick={() => updateService(selected, { enabled: true })}>批量启用</Button><Button size="small" disabled={busy} onClick={() => updateService(selected, { enabled: false })}>批量停用</Button>
-          <OutletSelect label="批量目标出口" value={batchTarget} onChange={setBatchTarget} groups={draft.groups} /><Button size="small" disabled={!batchTarget || busy} onClick={() => updateService(selected, { target: batchTarget })}>修改出口</Button>
+          <OutletSelect label="批量出站策略" value={batchTarget} onChange={setBatchTarget} groups={draft.groups} /><Button size="small" disabled={!batchTarget || busy} onClick={() => updateService(selected, { target: batchTarget })}>修改策略</Button>
           <Button variant="danger" size="small" onClick={() => deleteServices(selected)}>删除</Button><Button variant="ghost" size="small" onClick={() => setSelected([])}>清除选择</Button>
         </div>}
         {!visibleServices.length ? <Empty icon={Globe2} title={services.length ? '没有匹配的服务' : '还没有分流服务'}
-          detail={!services.length && '在上方选择规则集和目标出口，即可创建分流。'} /> : <ul className="outlet-list">{visibleServices.slice(servicesOffset, servicesOffset + 18).map(service => {
+          detail={!services.length && '在上方选择规则集和出站策略，即可创建分流。'} /> : <ul className="outlet-list">{visibleServices.slice(servicesOffset, servicesOffset + 18).map(service => {
           const rules = rulesByService.get(service.id)
           const record = state.providers[service.id]
           const index = services.indexOf(service)
@@ -549,7 +549,7 @@ export function RulesPage() {
                 ? record?.error || (record?.good ? formatNumber(record.good.count) + ' 条已获取内容' : '等待获取规则集')
                 : rules.slice(0, 4).map(rule => rule.value || ruleTypes[rule.type]?.[0]).join('、') || '暂无匹配条件'}</p>
             </div>
-            <OutletSelect label={service.name + ' 的目标出口'} value={service.target} onChange={target => updateService([service.id], { target })} disabled={busy} groups={draft.groups} />
+            <OutletSelect label={service.name + ' 的出站策略'} value={service.target} onChange={target => updateService([service.id], { target })} disabled={busy} groups={draft.groups} />
             <Popover><PopoverTrigger asChild><IconButton icon={Ellipsis} label={service.name + ' 的更多操作'} /></PopoverTrigger>
               <PopoverContent className="outlet-menu"><Button icon={Pencil} size="small" onClick={() => navigate('rules', service.id)}>编辑服务</Button>
                 <MoveButtons index={index} count={services.length} onMove={moveService} area="service" drag={false} />
@@ -565,7 +565,7 @@ export function RulesPage() {
       </div></Panel>
     </div>
     <section ref={ruleSection} className="rule-section">
-    <Panel title="分流规则表" count={formatNumber(draft.rules.length)} actions={<>
+    <Panel title="路由规则表" count={formatNumber(draft.rules.length)} actions={<>
       {undo && <Button icon={RotateCcw} size="small" disabled={busy} onClick={() => run(async () => {
         const order = new Map(undo.map((id, index) => [id, index]))
         await save({ ...draft, rules: [...draft.rules].sort((left, right) => (order.get(left.id) ?? Infinity) - (order.get(right.id) ?? Infinity)) })
@@ -573,15 +573,15 @@ export function RulesPage() {
       })}>撤销排序</Button>}
       <Button size="small" variant="primary" icon={Plus} onClick={focusPicker}>添加规则集</Button></>}>
       {draft.rules.length > 0 && <div className="config-toolbar rule-filters"><div className="filters">
-        <NativeSelect aria-label="筛选出口" value={outlet} onChange={event => { setOutlet(event.target.value); setServicesOffset(0); setRulesOffset(0) }}><NativeSelectOption value="">全部出口</NativeSelectOption>
+        <NativeSelect aria-label="筛选出站策略" value={outlet} onChange={event => { setOutlet(event.target.value); setServicesOffset(0); setRulesOffset(0) }}><NativeSelectOption value="">全部出站策略</NativeSelectOption>
           {[...Object.entries(builtins), ...draft.groups.map(group => [group.id, group.name])].map(([key, label]) => <NativeSelectOption value={key} key={key}>{label}</NativeSelectOption>)}
         </NativeSelect>
-        <SearchBox placeholder="搜索网站、域名或出口" value={query} onChange={value => { setQuery(value); setServicesOffset(0); setRulesOffset(0) }} />
+        <SearchBox placeholder="搜索网站、域名或出站策略" value={query} onChange={value => { setQuery(value); setServicesOffset(0); setRulesOffset(0) }} />
         <NativeSelect aria-label="筛选启用状态" value={status} onChange={event => { setStatus(event.target.value); setServicesOffset(0); setRulesOffset(0) }}><NativeSelectOption value="all">全部状态</NativeSelectOption><NativeSelectOption value="enabled">已启用</NativeSelectOption><NativeSelectOption value="disabled">已停用</NativeSelectOption></NativeSelect></div>
         <span className="soft-count">{formatNumber(view.counts.rules)} 条生成规则</span>
       </div>}
       {issues.length > 0 && <Disclosure defaultOpen={hasErrors} title={<span className={hasErrors ? 'error-text' : 'warning-text'}>
-        {formatNumber(issues.length)} 项分流{hasErrors ? '问题' : '提醒'}</span>}><IssueList items={issues} className="issue-list-inset" /></Disclosure>}
+        {formatNumber(issues.length)} 项规则{hasErrors ? '问题' : '提醒'}</span>}><IssueList items={issues} className="issue-list-inset" /></Disclosure>}
       {!!selectedRules.length && <div className="batch-bar">
         <strong>已选 {selectedRules.length} 条规则</strong>
         <Button size="small" disabled={busy} onClick={() => updateRules(rule => [{ ...rule, enabled: true }])}>批量启用规则</Button>
@@ -597,11 +597,11 @@ export function RulesPage() {
         }}>删除选中规则</Button>
         <Button size="small" variant="ghost" onClick={() => setSelectedRules([])}>清除选择</Button>
       </div>}
-      {!visibleRules.length ? <Empty icon={GitBranch} title={draft.rules.length ? '没有匹配规则' : '还没有分流规则'}
+      {!visibleRules.length ? <Empty icon={GitBranch} title={draft.rules.length ? '没有匹配规则' : '还没有路由规则'}
         actions={draft.rules.length > 0 && <Button onClick={clearFilters}>清除筛选</Button>} /> : <>
         <Table className="rule-table mobile-table" scrollLabel="规则优先级"><TableHeader><TableRow><TableHead><PageCheckbox label="选择当前页规则" checked={pageRules.every(rule => ruleBatch.has(rule.id))}
           onCheckedChange={enabled => setSelectedRules(enabled ? [...new Set([...selectedRules, ...pageRules.map(rule => rule.id)])] : selectedRules.filter(id => !pageRules.some(rule => rule.id === id)))} /></TableHead>
-          <TableHead>优先级</TableHead><TableHead>服务</TableHead><TableHead>条件</TableHead><TableHead>出口</TableHead><TableHead>状态</TableHead><TableHead>顺序与操作</TableHead></TableRow></TableHeader><TableBody>
+          <TableHead>优先级</TableHead><TableHead>服务</TableHead><TableHead>条件</TableHead><TableHead>出站策略</TableHead><TableHead>状态</TableHead><TableHead>顺序与操作</TableHead></TableRow></TableHeader><TableBody>
           {pageRules.map(rule => {
             const service = byService.get(rule.serviceId)
             const index = draft.rules.findIndex(item => item.id === rule.id)
@@ -613,7 +613,7 @@ export function RulesPage() {
               <TableCell mobileLabel="服务">{service?.name ?? '服务已删除'}</TableCell>
               <TableCell mobileLabel="匹配条件"><strong>{rule.type === 'RULE-SET' ? (service?.ruleSet ?? service?.name ?? '外部规则集') : rule.value || ruleTypes[rule.type]?.[0] || rule.type}</strong>
                 <small className="muted">{rule.type}</small></TableCell>
-              <TableCell mobileLabel="出口">{service ? outletName(service, draft.groups) : '—'}</TableCell>
+              <TableCell mobileLabel="出站策略">{service ? outletName(service, draft.groups) : '—'}</TableCell>
               <TableCell mobileLabel="状态"><Badge tone={!generated && rule.enabled && service?.enabled ? 'warning' : 'neutral'}>{generated ? '已生成' : !rule.enabled || !service?.enabled ? '已停用' : '有错误'}</Badge></TableCell>
               <TableCell className="table-row-wide"><div className="actions row-actions"><MoveButtons index={index} count={draft.rules.length} onMove={moveRule} area="rule" />
                 {service && <IconButton icon={Pencil} label="编辑规则" onClick={() => navigate('rules', service.id, rule.id)} />}
@@ -630,7 +630,7 @@ export function RulesPage() {
         {visibleRules.length > 40 && <Pager offset={rulesOffset} pageSize={40} count={visibleRules.length} onChange={setRulesOffset} />}
       </>}
     </Panel></section>
-    <section ref={catalogSection} className="rule-section"><Panel title="自定义规则集目录" count={state.library.providers.length} detail="保存常用远程地址。为服务添加后可独立选择出口与刷新周期。"
+    <section ref={catalogSection} className="rule-section"><Panel title="自定义规则集目录" count={state.library.providers.length} detail="保存常用远程地址。为服务添加后可独立设置出站策略和刷新周期。"
       actions={<Button icon={Plus} onClick={() => setCatalog({})}>添加目录条目</Button>}>
       {state.library.providers.length ? <div className="panel-padding stack tight">{state.library.providers.map(entry => <div className="list-option" key={entry.id}>
         <div><strong>{entry.name}</strong><p>{entry.behavior} · {entry.format} · 每 {entry.minutes} 分钟</p></div>

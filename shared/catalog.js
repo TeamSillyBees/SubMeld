@@ -46,13 +46,13 @@ export function regionLabel(code) {
 }
 
 export const commonKeywords = ['免费', '试用', '剩余流量', '流量重置', '到期', '官网', '套餐', 'Free', 'Trial']
-export const builtins = { DIRECT: '直连', REJECT: '拒绝', 'REJECT-DROP': '静默拒绝' }
+export const builtins = { DIRECT: '直连', REJECT: '拒绝', 'REJECT-DROP': '静默丢弃' }
 export const reservedNames = new Set([...Object.keys(builtins), 'GLOBAL', 'COMPATIBLE', 'PASS'])
 export const groupTypes = {
-  select: ['手动选择', '在 FlClash 中手动切换成员。'],
-  'url-test': ['自动测速', '按检测结果自动选择延迟较低的成员。'],
-  fallback: ['故障转移', '按成员顺序使用首个有效出口。'],
-  'load-balance': ['负载均衡', '按策略把连接分配给不同成员。'],
+  select: ['手动选择', '手动指定要使用的组内代理。'],
+  'url-test': ['自动选择', '根据健康检查的延迟和切换容差选择代理。'],
+  fallback: ['自动回退', '按列表顺序使用第一个可用代理。'],
+  'load-balance': ['负载均衡', '按分配策略将连接分配给组内代理。'],
 }
 export const ruleTypes = {
   DOMAIN: ['完整域名', '仅匹配填写的域名，如 api.github.com。', 'api.github.com'],
@@ -63,10 +63,10 @@ export const ruleTypes = {
   'DST-PORT': ['目标端口', '匹配连接的目标端口，可填写 1 到 65535。', '443'],
   'PROCESS-NAME': ['进程名', '依赖客户端的进程识别。', 'example.exe'],
   'PROCESS-PATH': ['进程路径', '匹配客户端本机程序的完整路径。', 'C:/Apps/example.exe'],
-  GEOIP: ['地理 IP', '依赖客户端 GeoIP 数据库。', 'CN'],
-  GEOSITE: ['地理站点', '依赖客户端 GeoSite 数据库中的分类。', 'cn'],
-  'RULE-SET': ['外部规则集', '使用服务端已获取的规则集。', ''],
-  MATCH: ['兜底规则', '匹配其余所有流量，通常放在最后。', ''],
+  GEOIP: ['IP 归属地', '按 GeoIP 数据库匹配目标 IP 的归属地。', 'CN'],
+  GEOSITE: ['域名集合', '匹配指定 GeoSite 分类中的域名。', 'cn'],
+  'RULE-SET': ['规则集', '匹配所引用规则集中的条目。', ''],
+  MATCH: ['匹配所有请求', '通常放在规则列表末尾，处理先前规则未匹配的请求。', ''],
 }
 
 export const servicePresets = [
@@ -80,7 +80,7 @@ export const servicePresets = [
 
 export const standardGroups = [
   { name: '手动选择', type: 'select', members: [{ kind: 'pool', sourceId: '', regions: [] }, { kind: 'builtin', id: 'DIRECT' }] },
-  { name: '自动测速', type: 'url-test', members: [{ kind: 'pool', sourceId: '', regions: [] }] },
+  { name: '自动选择', type: 'url-test', members: [{ kind: 'pool', sourceId: '', regions: [] }] },
 ]
 
 export const defaultFilter = { keep: [], exclude: [], keywords: [], manual: [], unknown: 'auto' }

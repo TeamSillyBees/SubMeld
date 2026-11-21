@@ -30,17 +30,17 @@ export function createVerifier({ binary = resolve('bin', binaryName), directory 
         if (proxy) {
           const node = compiled.nodes.filter(node => node.kept)[Number(proxy[1])]
           return {
-            ...failed('core-node', 'nodes', node?.sourceId, 'Mihomo 不接受' + (node ? '节点「' + node.name + '」的' : '一项') + '连接参数。请检查机场格式，或排除该节点后重试。'),
+            ...failed('core-node', 'nodes', node?.sourceId, 'Mihomo 不接受' + (node ? '节点「' + node.name + '」的' : '一项') + '连接参数。请检查订阅源中的节点参数，或排除该节点后重试。'),
             relatedId: node?.id,
           }
         }
         if (/geo(?:site|ip)|mmdb/i.test(output)) return failed('core-geo', 'rules', null, 'Mihomo 无法加载地理规则或对应数据。请检查地理规则匹配值和服务端网络。')
-        if (/proxy group|proxy-group/i.test(output)) return failed('core-group', 'groups', null, 'Mihomo 不接受代理组参数。请检查组成员和测速参数。')
+        if (/proxy group|proxy-group/i.test(output)) return failed('core-group', 'groups', null, 'Mihomo 不接受代理组参数。请检查组内代理和健康检查参数。')
         if (/dns/i.test(output)) return failed('core-dns', 'settings', null, 'Mihomo 不接受当前 DNS 配置。请检查 DNS 地址及选项。')
         if (/rule/i.test(output)) {
           const number = output.match(/\brules?\[(\d+)\]/i)
           const rule = number && compiled.rules[Number(number[1])]
-          return { ...failed('core-rule', 'rules', rule?.serviceId, 'Mihomo 不接受一项分流规则或规则集。请检查本页的规则和已获取内容。'), relatedId: rule?.id }
+          return { ...failed('core-rule', 'rules', rule?.serviceId, 'Mihomo 不接受一项路由规则或规则集。请检查本页的规则和已获取内容。'), relatedId: rule?.id }
         }
         return failed('core-invalid', 'publish', null, 'Mihomo 未通过配置校验。请检查节点协议、代理组和网络设置。')
       } finally {

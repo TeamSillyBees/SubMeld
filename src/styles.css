@@ -141,8 +141,7 @@
 .workspace-sidebar-header { min-height: clamp(3.6rem, 2.85vw, 4.5rem); justify-content: center; padding: .625rem .85rem; border-bottom: 1px solid var(--border); }
 .workspace-sidebar-header .brand-link { width: fit-content; border-radius: var(--radius); }
 .brand { display: inline-flex; gap: .65rem; align-items: center; color: var(--foreground); }
-.brand-symbol { display: grid; flex: none; place-items: center; width: clamp(2rem, 1.58vw, 2.5rem); aspect-ratio: 1; border-radius: 31%; background: var(--primary); color: var(--primary-foreground); }
-.brand-symbol svg { width: 47%; height: 47%; stroke-width: 1.65; }
+.brand-symbol { flex: none; width: clamp(2rem, 1.58vw, 2.5rem); height: auto; }
 .brand-type { display: grid; gap: .18rem; }
 .brand-type strong { font-size: clamp(1rem, .72vw, 1.17rem); font-weight: 680; letter-spacing: -.025em; line-height: 1.1; }
 .brand-type small { color: var(--muted-foreground); font: 400 clamp(.7rem, .52vw, .83rem)/1.15 var(--font-mono); }

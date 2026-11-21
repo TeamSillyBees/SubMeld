@@ -31,4 +31,6 @@ const styles = await postcss([tailwind({ optimize: true })]).process(await readF
   from: source, to: output, map: false,
 })
 await writeFile(output, styles.css)
+await copyFile('docs/assets/submeld-logo.svg', 'dist/assets/submeld-logo.svg')
+await copyFile('src/assets/favicon.png', 'dist/assets/favicon.png')
 await copyFile('index.html', 'dist/index.html')

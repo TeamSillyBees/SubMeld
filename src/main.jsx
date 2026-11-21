@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { setNonce } from 'get-nonce'
-import { Activity, CircleHelp, Filter, GitFork, History, Layers3, Link2, LogOut, Send, Server, Settings2, Share2, ShieldCheck } from 'lucide-react'
+import { Activity, CircleHelp, Filter, GitFork, History, Layers3, Link2, LogOut, Send, Server, Settings2, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage } from '@/components/ui/breadcrumb'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -52,7 +52,7 @@ function routeFromHash(hash = location.hash) {
 
 function Brand() {
   return <span className="brand" translate="no">
-    <span className="brand-symbol"><Share2 aria-hidden="true" /></span>
+    <img className="brand-symbol" src="/assets/submeld-logo.svg" alt="" width={32} height={32} />
     <span className="brand-type"><strong>SubMeld</strong><small>FlClash Console</small></span>
   </span>
 }

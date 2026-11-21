@@ -16,6 +16,8 @@ const clientFiles = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/assets/app.js', ['assets/app.js', 'text/javascript; charset=utf-8']],
   ['/assets/app.css', ['assets/app.css', 'text/css; charset=utf-8']],
+  ['/assets/submeld-logo.svg', ['assets/submeld-logo.svg', 'image/svg+xml']],
+  ['/assets/favicon.png', ['assets/favicon.png', 'image/png']],
 ])
 
 function send(response, status, contentType, body) {

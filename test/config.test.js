@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { stringify } from 'yaml'
-import { blankDraft, defaultFilter, identifyRegion } from '../shared/catalog.js'
+import { blankDraft, defaultFilter, identifyRegion, regionalAutoGroups } from '../shared/catalog.js'
 import { evaluate, filterNodes, normalizeDomain, sourceReferences, testDomain } from '../shared/config.js'
 import { membersForSources } from '../shared/group-filter.js'
 import { configHasSubscriptionSecret, parseProvider, parseSource } from '../server/parse.js'
 import { containsSubscriptionSecret, subscriptionSecrets } from '../server/remote.js'
 import { createRuleSetMatcher } from '../server/rule-set-preview.js'
-import { draft as draftSchema } from '../server/schema.js'
+import { draft as draftSchema, group as groupSchema } from '../server/schema.js'
 
 const rawName = '  🇭🇰 香港 IEPL 01 | 0.5x  '
 const node = (name, port = 443) => ({ name, type: 'ss', server: 'edge.example.net', port, cipher: 'aes-128-gcm', password: 'node-private-credential' })
@@ -54,6 +54,32 @@ test('collisions preserve names and groups resolve pool order and references', (
   assert.deepEqual(distinct.config['proxy-groups'][1].proxies, ['香港线路', 'DIRECT'])
   group.members.push({ kind: 'group', id: nested.id })
   assert.ok(evaluate(draft, data).issues.some(issue => issue.message.includes('循环引用')))
+})
+
+test('regional url-test presets follow retained nodes across sources and refreshes', () => {
+  const a = source('airport-a', { keywords: ['试用'] })
+  const b = source('airport-b', {}, '[B] ')
+  const groups = regionalAutoGroups.map((group, i) => groupSchema.parse({ ...group, id: 'regional-' + i, enabled: true }))
+  const draft = { ...blankDraft(), sources: [a, b], groups }
+  const data = {
+    [a.id]: parse(['HK01', '🇯🇵 02', '狮城 03', '香港 试用', '未标地区', 'TW01'].map((name, i) => node(name, 1000 + i))),
+    [b.id]: parse([node('Hong Kong 02', 2001), node('Seattle 04', 2002)]),
+  }
+  const compiled = evaluate(draft, data, {}, true)
+  assert.deepEqual(compiled.issues.filter(issue => issue.severity === 'error'), [])
+  const exported = compiled.config['proxy-groups']
+  assert.deepEqual(exported.map(({ name, proxies }) => [name, proxies]), [
+    ['香港自动选择', ['HK01', '[B] Hong Kong 02']],
+    ['日本自动选择', ['🇯🇵 02']],
+    ['新加坡自动选择', ['狮城 03']],
+    ['美国自动选择', ['[B] Seattle 04']],
+  ])
+  assert.ok(exported.every(group => group.type === 'url-test' && group.interval === 300 && group.tolerance === 50))
+
+  data[b.id] = parse([node('SG05')])
+  const refreshed = evaluate(draft, data, {}, true)
+  assert.deepEqual(refreshed.config['proxy-groups'].map(group => group.proxies), [['HK01'], ['🇯🇵 02'], ['狮城 03', '[B] SG05'], []])
+  assert.ok(refreshed.issues.some(issue => issue.id === groups[3].id && issue.code === 'group-empty'))
 })
 
 test('removing sources narrows scoped group filters and preserves all-source filters', () => {

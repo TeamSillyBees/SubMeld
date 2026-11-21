@@ -83,6 +83,12 @@ export const standardGroups = [
   { name: '自动选择', type: 'url-test', members: [{ kind: 'pool', sourceId: '', regions: [] }] },
 ]
 
+export const regionalAutoGroups = ['HK', 'JP', 'SG', 'US'].map(region => ({
+  name: regionLabel(region) + '自动选择',
+  type: 'url-test',
+  members: [{ kind: 'pool', sourceIds: [], regions: [region] }],
+}))
+
 export const defaultFilter = { keep: [], exclude: [], keywords: [], manual: [], unknown: 'auto' }
 export const defaultBase = {
   mode: 'rule', logLevel: 'info', port: 7890, ipv6: false, allowLan: false,

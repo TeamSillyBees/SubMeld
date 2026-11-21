@@ -477,6 +477,7 @@ html:has(.settings-save-bar) { scroll-padding-bottom: 6rem; }
 .template-strip { min-width: 0; max-width: 100%; }
 .template-strip button { max-width: 100%; height: auto; white-space: normal; overflow-wrap: anywhere; }
 .template-strip > button[aria-pressed=true] { color: var(--accent-foreground); background: var(--accent); border-color: #bbc9fd; }
+.regional-group-picker[data-slot=field-set] { gap: .5rem; }
 .config-page .segmented {
   padding: .17rem; border: 0; border-radius: var(--radius); background: var(--muted);
 }

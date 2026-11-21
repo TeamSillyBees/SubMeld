@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowUpDown, Check, Copy, Ellipsis, Layers3, Pencil, Plus, RotateCcw, Trash2, X } from 'lucide-react'
+import { ArrowUpDown, Check, ChevronDown, Copy, Ellipsis, Layers3, Pencil, Plus, RotateCcw, Trash2, X } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { builtins, groupTypes, regionLabel, standardGroups } from '../shared/catalog.js'
-import { membersForSources, memberSourceIds, poolCondition } from '../shared/group-filter.js'
+import { builtins, groupTypes, regionalAutoGroups, regionLabel, standardGroups } from '../shared/catalog.js'
+import { compilePoolFilter, membersForSources, memberSourceIds, poolCondition } from '../shared/group-filter.js'
 import { GroupFilter } from './group-filter.jsx'
 import { groupReferences, nodeKey } from '../shared/config.js'
 import { useConfirm, useUnsavedChanges } from './confirm.jsx'
@@ -270,13 +270,34 @@ function cloneGroups(input, draft) {
   })
 }
 
+function RegionalGroupPicker({ nodes, busy, onImport }) {
+  const options = useMemo(() => regionalAutoGroups.map(group => {
+    const filter = compilePoolFilter(group.members[0])
+    return { group, count: nodes.filter(filter.matches).length }
+  }), [nodes])
+  const [selected, setSelected] = useState(() => options.filter(option => option.count > 0).map(option => option.group))
+  const chosen = options.filter(({ group }) => selected.includes(group))
+  return <FieldSet className="regional-group-picker" disabled={busy}>
+    <FieldLegend variant="label">地区自动选择</FieldLegend>
+    <p className="field-note muted">每个地区创建一个 <code>url-test</code> 组，匹配所有订阅源中该地区的保留节点。</p>
+    <FieldGroup className="option-scroll">{options.map(({ group, count }) =>
+      <CheckOption key={group.name} checked={selected.includes(group)} onCheckedChange={checked =>
+        setSelected(current => checked ? [...current, group] : current.filter(item => item !== group))}>
+        <span className="between w-full"><span>{group.name}</span><span className="field-note muted numeric">{formatNumber(count)} 个节点</span></span>
+      </CheckOption>)}</FieldGroup>
+    {chosen.some(option => option.count === 0) && <p className="field-note warning-text" role="status">所选地区中有空组。发布前请补充匹配节点或停用空组。</p>}
+    <div className="actions"><Button size="small" icon={Plus} busy={busy} disabled={!chosen.length}
+      onClick={() => onImport(chosen.map(option => option.group))}>{chosen.length ? '导入 ' + chosen.length + ' 个代理组' : '导入所选地区'}</Button></div>
+  </FieldSet>
+}
+
 export function GroupsPage() {
   const { state, view, route, save, notify, navigate, call, applyState } = useProject()
   const confirm = useConfirm()
   const [query, setQuery] = useSearchValue('q')
   const [remove, setRemove] = useState(null)
   const [replacement, setReplacement] = useState('')
-  const [libraryOpen, setLibraryOpen] = useState(false)
+  const [templateMenu, setTemplateMenu] = useState(null)
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const groups = state.draft.groups
@@ -304,8 +325,8 @@ export function GroupsPage() {
   const move = (from, to) => run(() => updateGroups(moveAt(groups, from, to)))
   const importTemplate = entries => run(async () => {
     await updateGroups([...groups, ...cloneGroups(entries, state.draft)])
-    setLibraryOpen(false)
-    notify('已添加模板中的代理组')
+    setTemplateMenu(null)
+    notify('已添加 ' + entries.length + ' 个代理组')
   })
   function commitDelete() {
     return run(async () => {
@@ -324,11 +345,17 @@ export function GroupsPage() {
   return <div className="stack config-page">
     <h1 className="sr-only" tabIndex={-1}>代理组</h1>
     <Panel title="代理组编排" count={formatNumber(groups.length)} actions={<>
-      <Button size="small" icon={Layers3} disabled={editingDirty} onClick={() => setLibraryOpen(true)}>组模板</Button>
+      <Button size="small" icon={Layers3} disabled={editingDirty || busy} onClick={() => setTemplateMenu('library')}>组模板</Button>
       <Button icon={Plus} size="small" variant="primary" onClick={() => navigate('groups', 'new')}>新建代理组</Button>
     </>}>
       <div className="config-toolbar"><div className="template-strip"><Layers3 aria-hidden="true" /><span>常用组模板</span>
         <Button size="small" icon={Plus} disabled={editingDirty || busy} onClick={() => importTemplate(standardGroups)}>手动选择 + 自动选择</Button>
+        <Popover open={templateMenu === 'regions'} onOpenChange={open => setTemplateMenu(open ? 'regions' : null)}>
+          <PopoverTrigger asChild><Button size="small" disabled={editingDirty || busy}>地区自动选择<ChevronDown data-icon="inline-end" aria-hidden="true" /></Button></PopoverTrigger>
+          <PopoverContent align="start" className="option-popover" aria-label="地区自动选择">
+            <RegionalGroupPicker nodes={view.nodes} busy={busy} onImport={importTemplate} />
+          </PopoverContent>
+        </Popover>
         {state.library.groups.slice(0, 3).map(template => <Button key={template.id} size="small" icon={Plus} disabled={editingDirty || busy} onClick={() => importTemplate(template.groups)}>{template.name}</Button>)}</div></div>
     </Panel>
     <div className="group-workspace">
@@ -363,9 +390,10 @@ export function GroupsPage() {
         <Field label="替代策略"><OutletSelect label="替代策略" groups={candidateGroups} value={replacement} onChange={setReplacement} /></Field>
       </div> : <p>此代理组没有其他规则或分组引用。</p>}
     </Modal>}
-    {libraryOpen && <Modal title="代理组模板" detail="导入后可自由编辑、停用及删除。跨方案套用时，仅保留可用的来源与组引用。" onClose={() => setLibraryOpen(false)}>
+    {templateMenu === 'library' && <Modal title="代理组模板" detail="导入后可自由编辑、停用及删除。跨方案套用时，仅保留可用的来源与组引用。" onClose={() => setTemplateMenu(null)}>
       <div className="stack">
         <div className="list-option"><div><strong>常用代理组</strong><p>手动选择、自动选择</p></div><Button size="small" onClick={() => importTemplate(standardGroups)} busy={busy}>导入</Button></div>
+        <RegionalGroupPicker nodes={view.nodes} busy={busy} onImport={importTemplate} />
         {state.library.groups.map(template => <div className="list-option" key={template.id}><div><strong>{template.name}</strong><p>{template.groups.length} 个代理组</p></div>
           <div className="actions"><Button size="small" onClick={() => importTemplate(template.groups)} disabled={busy}>导入</Button>
             <IconButton icon={Trash2} label={'删除模板 ' + template.name} onClick={async () => {

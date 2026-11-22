@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowUpRight, Check, Copy, Download, Eye, EyeOff, Layers3, Link2, Plus, RotateCcw, ShieldCheck, SlidersHorizontal, Trash2, Upload } from 'lucide-react'
+import { ArrowUpRight, Check, Copy, Download, Eye, EyeOff, Link2, RotateCcw, ShieldCheck, SlidersHorizontal, Trash2, Upload } from 'lucide-react'
 import { dnsPresets } from '../shared/catalog.js'
 import { networkIssues } from '../shared/config.js'
 import { useConfirm, useUnsavedChanges } from './confirm.jsx'
@@ -18,7 +18,6 @@ export function SettingsPage() {
   const [form, setForm] = useState(() => structuredClone(original))
   const [advancedText, setAdvancedText] = useState(() => JSON.stringify(original.advanced ?? {}, null, 2))
   const [fieldKey, setFieldKey] = useState(0)
-  const [profiles, setProfiles] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const lastField = useRef(null)
@@ -71,8 +70,7 @@ export function SettingsPage() {
   return <div className="stack config-page">
     <h1 className="sr-only" tabIndex={-1}>基础设置</h1>
     <Panel title={<>基础配置 <code className="tech-chip">{form.mode} · {form.dns.enabled ? form.dns.mode : '系统 DNS'}</code></>}
-      actions={<><Button size="small" icon={Layers3} disabled={dirty || busy} onClick={() => setProfiles(true)}>配置方案</Button>
-        <Button size="small" icon={Check} disabled={!dirty || busy} onClick={submit}>保存基础设置</Button></>}>
+      actions={<Button size="small" icon={Check} disabled={!dirty || busy} onClick={submit}>保存基础设置</Button>}>
       <div className="config-toolbar" onFocusCapture={rememberField}><div className="template-strip"><SlidersHorizontal aria-hidden="true" /><span>DNS 预设</span>
         {dnsChoices.map(([id, label]) => <Button size="small" key={id} aria-pressed={selectedPreset === id} disabled={busy} onClick={() => applyDnsPreset(id)}>{label}</Button>)}</div></div>
     </Panel>
@@ -148,53 +146,7 @@ export function SettingsPage() {
         <Button icon={Check} variant="primary" busy={busy} onClick={submit}>保存设置</Button>
       </div>
     </div>}
-    {profiles && <ProfilesDialog onClose={() => setProfiles(false)} />}
   </div>
-}
-
-function ProfilesDialog({ onClose }) {
-  const { state, call, applyState, notify, navigate } = useProject()
-  const confirm = useConfirm()
-  const [action, setAction] = useState('create')
-  const [title, setTitle] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const guard = useUnsavedChanges(Boolean(title.trim() && (action !== 'rename' || title !== state.title)), '下次需重新填写方案名称。')
-  const close = () => { if (!busy) return guard.close(onClose) }
-  async function commit() {
-    setBusy(true)
-    setError('')
-    try {
-      applyState(await call('profiles', { action, title }))
-      notify('配置方案已保存')
-      guard.leave(() => {
-        onClose()
-        if (action !== 'rename') void navigate('home')
-      })
-    } catch (error) { setError(error.message) } finally { setBusy(false) }
-  }
-  return <Modal title="独立配置方案" detail="每个方案都有独立的订阅源、配置、发布历史和私有链接。可从侧栏切换。" onClose={close} footer={<>
-    <Button onClick={close}>取消</Button><Button variant="primary" icon={Plus} disabled={!title.trim()} busy={busy} onClick={commit}>{action === 'rename' ? '保存名称' : action === 'clone' ? '复制方案' : '新建方案'}</Button>
-  </>}>
-    <div className="stack">
-      {error && <Alert tone="danger">{error}</Alert>}
-      <FieldGroup className="form-grid"><Field label="方案操作"><NativeSelect value={action} onChange={event => { const value = event.target.value; setAction(value); setTitle(value === 'rename' ? state.title : '') }}>
-        <NativeSelectOption value="create">新建空白方案</NativeSelectOption><NativeSelectOption value="clone">复制当前配置和节点</NativeSelectOption><NativeSelectOption value="rename">重命名当前方案</NativeSelectOption>
-      </NativeSelect></Field>
-        <Field label="方案名称"><Input maxLength={64} value={title} onChange={event => setTitle(event.target.value)} /></Field></FieldGroup>
-      {state.profiles.length > 1 && <div><Button variant="danger" icon={Trash2} disabled={busy} onClick={async () => {
-        if (!await confirm({ title: '删除当前配置方案？', detail: '将删除「' + state.title + '」及其历史。此方案的私有链接会失效。', action: '删除配置方案', danger: true })) return
-        setBusy(true)
-        try {
-          applyState(await call('profiles', { action: 'delete' }))
-          guard.leave(() => { onClose(); void navigate('home') })
-          notify('配置方案已删除')
-        }
-        catch (error) { setError(error.message) }
-        finally { setBusy(false) }
-      }}>删除当前方案</Button></div>}
-    </div>
-  </Modal>
 }
 
 function PasswordDialog({ onClose }) {

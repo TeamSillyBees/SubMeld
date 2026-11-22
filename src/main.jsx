@@ -13,13 +13,14 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { ConfirmProvider } from './confirm.jsx'
 import { Dashboard } from './dashboard.jsx'
 import { GroupsPage } from './groups.jsx'
+import { ProfileNameDialog, ProfileSelector } from './profiles.jsx'
 import { ProjectContext, projection } from './project.jsx'
 import { PublishPage, UpdatesPage } from './release.jsx'
 import { RulesPage } from './rules.jsx'
 import { SafetyPage, SettingsPage } from './settings.jsx'
 import { NodesPage, SourcesPage } from './sources.jsx'
 import { refreshWorkspace } from './workspace-sync.js'
-import { Alert, api, Button, ButtonLink, Field, FieldGroup, IconButton, Input, Modal, NativeSelect, NativeSelectOption, RouteLink, formatNumber, versionLabel } from './ui.jsx'
+import { Alert, api, Button, ButtonLink, Field, FieldGroup, IconButton, Input, Modal, RouteLink, formatNumber, versionLabel } from './ui.jsx'
 
 // Radix injects the scrollbar compensation for open dialogs.
 setNonce(document.querySelector('script[src="/assets/app.js"]')?.nonce)
@@ -122,9 +123,12 @@ function Loading({ error, retry, children }) {
   </main>
 }
 
-function WorkspaceLayout({ state, view, route, switchProfile, signOut, onHelp, children }) {
+function WorkspaceLayout({ state, view, route, changeProfile, signOut, onHelp, children }) {
   const [, title] = pages.find(([page]) => page === route.page)
   const { setOpenMobile, openMobile, isMobile, open } = useSidebar()
+  const [profileEditor, setProfileEditor] = useState(null)
+  const profileTrigger = useRef(null)
+  const sidebarTrigger = useRef(null)
   const publishedCounts = state.current?.counts
   const summary = publishedCounts ?? view.counts
   const navCounts = {
@@ -167,18 +171,19 @@ function WorkspaceLayout({ state, view, route, switchProfile, signOut, onHelp, c
       </SidebarContent>
       <Separator />
       <SidebarFooter className="workspace-sidebar-footer">
-        {state.profiles.length > 1 ? <NativeSelect className="profile-select" aria-label="切换配置方案" name="profile" value={state.id}
-          onChange={event => { void switchProfile(event.target.value) }}>
-          {state.profiles.map(profile => <NativeSelectOption key={profile.id} value={profile.id}>{profile.title}</NativeSelectOption>)}
-        </NativeSelect> : <span className="profile-name" title={state.title}>{state.title}</span>}
-        <IconButton icon={CircleHelp} label="键盘快捷键" onClick={() => { setOpenMobile(false); onHelp() }} />
-        <IconButton icon={LogOut} label="退出登录" onClick={signOut} />
+        <ProfileSelector triggerRef={profileTrigger} onChange={changeProfile} onEdit={action => {
+          setProfileEditor({ action, id: state.id })
+          setOpenMobile(false)
+        }}>
+          <IconButton size="icon-sm" icon={CircleHelp} label="键盘快捷键" onClick={() => { setOpenMobile(false); onHelp() }} />
+          <IconButton size="icon-sm" icon={LogOut} label="退出登录" onClick={signOut} />
+        </ProfileSelector>
       </SidebarFooter>
     </Sidebar>
     <div className="workspace-shell">
       <header className="workspace-bar">
         <div className="bar-leading">
-          <SidebarTrigger aria-label={isMobile ? '打开导航' : open ? '收起导航' : '展开导航'} aria-expanded={isMobile ? openMobile : open} />
+          <SidebarTrigger ref={sidebarTrigger} aria-label={isMobile ? '打开导航' : open ? '收起导航' : '展开导航'} aria-expanded={isMobile ? openMobile : open} />
           <Separator orientation="vertical" />
           <Breadcrumb aria-label="当前位置">
             <BreadcrumbList>
@@ -197,6 +202,8 @@ function WorkspaceLayout({ state, view, route, switchProfile, signOut, onHelp, c
       </header>
       <main id="main-content" className="workspace-main" tabIndex={-1}>{children}</main>
     </div>
+    {profileEditor?.id === state.id && <ProfileNameDialog action={profileEditor.action} onChange={changeProfile}
+      returnFocusRef={isMobile ? sidebarTrigger : profileTrigger} onClose={() => setProfileEditor(null)} />}
   </>
 }
 
@@ -342,7 +349,7 @@ function App() {
   useEffect(() => {
     if (!state) return
     function shortcut(event) {
-      if (document.querySelector('[role="dialog"],[role="alertdialog"]') || /^(input|textarea|select)$/i.test(event.target.tagName) || event.target.isContentEditable) return
+      if (document.querySelector('[role="dialog"],[role="alertdialog"],[role="menu"]') || /^(input|textarea|select)$/i.test(event.target.tagName) || event.target.isContentEditable) return
       if (event.altKey && /^[1-9]$/.test(event.key)) {
         event.preventDefault()
         void navigate(pages[Number(event.key) - 1][0])
@@ -365,13 +372,19 @@ function App() {
     }
   }, [state?.revision, call, applyState, notify, reload])
 
-  async function switchProfile(id) {
-    if (navigationGuard.current && !await navigationGuard.current()) return
-    try {
-      await reload(id)
+  async function changeProfile(action, value) {
+    const changesWorkspace = action !== 'rename'
+    if (changesWorkspace && navigationGuard.current && !await navigationGuard.current()) return false
+    if (action === 'switch') {
+      await reload(value)
+      if (!latestState.current) return false
+      notify('已切换至「' + latestState.current.title + '」')
+    } else applyState(await call('profiles', { action, title: value }))
+    if (changesWorkspace) {
       navigationGuard.current = null
       await navigate('home')
-    } catch (error) { notify(error.message, 'danger') }
+    }
+    return true
   }
 
   async function signOut() {
@@ -399,7 +412,7 @@ function App() {
 
   return <ProjectContext.Provider value={context}>
     <SidebarProvider className="workspace-layout" style={{ '--sidebar-width': 'clamp(14rem, 13.4vw, 20rem)' }}>
-      <WorkspaceLayout state={state} view={view} route={route} switchProfile={switchProfile} signOut={signOut} onHelp={() => setHelp(true)}>
+      <WorkspaceLayout state={state} view={view} route={route} changeProfile={changeProfile} signOut={signOut} onHelp={() => setHelp(true)}>
         <Page key={state.id + '/' + route.page} />
       </WorkspaceLayout>
     </SidebarProvider>

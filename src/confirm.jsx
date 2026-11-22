@@ -48,19 +48,22 @@ export function ConfirmProvider({ children }) {
   </ConfirmContext.Provider>
 }
 
-export function useUnsavedChanges(dirty, detail) {
+export function useUnsavedChanges(dirty, detail, { guardNavigation = true } = {}) {
   const confirm = useConfirm()
   const { setNavigationGuard } = useProject()
   const canLeave = useCallback(() => !dirty || confirm({ title: '放弃本次修改？', detail, action: '放弃修改', danger: true }), [dirty, detail, confirm])
 
   useEffect(() => {
     if (!dirty) return
-    const remove = setNavigationGuard(canLeave)
+    const remove = guardNavigation ? setNavigationGuard(canLeave) : null
     const beforeUnload = event => { event.preventDefault(); event.returnValue = true }
     window.addEventListener('beforeunload', beforeUnload)
-    return () => { remove(); window.removeEventListener('beforeunload', beforeUnload) }
-  }, [dirty, canLeave, setNavigationGuard])
+    return () => { remove?.(); window.removeEventListener('beforeunload', beforeUnload) }
+  }, [dirty, canLeave, setNavigationGuard, guardNavigation])
 
-  const leave = action => { setNavigationGuard(null); return action() }
+  const leave = action => {
+    if (guardNavigation) setNavigationGuard(null)
+    return action()
+  }
   return { leave, close: async action => { if (await canLeave()) return leave(action) } }
 }

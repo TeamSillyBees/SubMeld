@@ -114,12 +114,14 @@ YAML 和节点链接导入为本地订阅源，点「解析并预览」即可筛
 
 | 命令 | 用途 |
 | --- | --- |
+| `npm run dev` | 启动 Vite 开发服务器、工作台 API 和刷新调度，支持 React 热更新 |
+| `npm run typecheck` | 严格检查前端、服务端、共享逻辑、脚本和测试的 TypeScript 类型 |
 | `npm run core:install` | 安装或检查项目指定版本的 Mihomo |
-| `npm run build` | 构建管理界面到 `dist/` |
+| `npm run build` | 通过类型检查后，将生产管理界面构建到 `dist/` |
 | `npm start` | 启动工作台、私有订阅接口和刷新调度 |
 | `npm test` | 运行单元测试与 HTTP 集成测试 |
 | `npm run test:ui` | 运行 Chromium 浏览器端到端测试 |
-| `node scripts/update-rule-sets.js` | 更新内置规则集索引，随后重新构建管理界面 |
+| `node scripts/update-rule-sets.ts` | 更新内置规则集索引，随后重新构建管理界面 |
 
 ## 文档
 
@@ -134,9 +136,12 @@ YAML 和节点链接导入为本地订阅源，点「解析并预览」即可筛
 
 ## 开发与验证
 
-完成快速开始中的依赖安装、核心安装和前端构建后，可运行完整验证。
+前端采用 React、Vite 和 TypeScript，服务端由 Node.js 24 直接运行 TypeScript。安装依赖和 Mihomo 后，运行 `npm run dev`，打开终端显示的本机地址（默认 `http://127.0.0.1:5173`）。页面、`/api/` 和 `/sub/` 共用该地址。开发时可用 `SUBMELD_DATA_DIR` 指定独立的数据目录。
+
+浏览器测试会启动生产服务并读取 `dist/`。运行以下命令可验证类型、构建、服务端和浏览器流程。
 
 ```sh
+npm run build
 npm test
 npx playwright install chromium
 npm run test:ui

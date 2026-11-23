@@ -1,0 +1,22 @@
+import type { Diff, Library, Note, Profile, ProviderData, RejectedItem, SourceData, SubscriptionInfo, UpdateLog, Version } from '../shared/model.ts'
+
+export type Dataset = SourceData | ProviderData
+export interface StoredRecord<T extends Dataset = Dataset> {
+  good?: T | null
+  pending?: { accepted: boolean; data: SourceData; reason: string; diff: Diff | null } | null
+  lastAttempt?: string
+  lastSuccess?: string
+  error?: string | null
+  lastRejected?: RejectedItem[]
+  subscriptionInfo?: SubscriptionInfo | null
+}
+export type Stored<S extends string, K extends string = string> =
+  S extends 'profiles' ? Profile :
+  S extends 'auth' ? { salt: string; hash: string } :
+  S extends 'system' ? (K extends 'library' ? Library : string[]) :
+  S extends `versions/${string}` ? Version :
+  S extends `notes/${string}` ? Note :
+  S extends `updates/${string}` ? UpdateLog :
+  S extends `datasets/${string}` ? StoredRecord<K extends `source/${string}` ? SourceData : K extends `provider/${string}` ? ProviderData : Dataset> :
+  unknown
+export type DocumentRow = [space: string, key: string, value: unknown]

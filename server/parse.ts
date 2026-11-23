@@ -1,0 +1,384 @@
+import { createHash } from 'node:crypto'
+import { TextDecoder } from 'node:util'
+import { parseDocument } from 'yaml'
+import ipaddr from 'ipaddr.js'
+import { identifyRegion } from '../shared/catalog.ts'
+import { classicalEntry, normalizeDomain, parseRange } from '../shared/config.ts'
+import { containsSubscriptionSecret, hasSecret, subscriptionSecrets } from './remote.ts'
+import type { Connection, Provider, ProviderData, RawNode, SourceData } from '../shared/model.ts'
+import type { Secrets } from './remote.ts'
+import { UserError, objectValue } from './schema.ts'
+
+const words = (value: string) => value.split(/\s+/).filter(Boolean)
+const common = words('type server port ports ip-version udp interface-name routing-mark tfo mptcp smux')
+const tls = words('tls sni servername alpn skip-cert-verify fingerprint client-fingerprint certificate private-key reality-opts ech-opts')
+const transport = words('network ws-opts grpc-opts http-opts h2-opts xhttp-opts')
+const protocols = {
+  ss: words('cipher password plugin plugin-opts udp-over-tcp udp-over-tcp-version ip-version'),
+  ssr: words('cipher password obfs obfs-param protocol protocol-param'),
+  vmess: [...words('uuid alterId cipher global-padding authenticated-length packet-encoding xudp'), ...tls, ...transport],
+  vless: [...words('uuid flow packet-encoding xudp encryption'), ...tls, ...transport],
+  trojan: [...words('password ss-opts'), ...tls, ...transport],
+  hysteria: [...words('auth auth-str protocol obfs up down ca ca-str recv-window-conn recv-window disable-mtu-discovery hop-interval fast-open'), ...tls],
+  hysteria2: [...words('password obfs obfs-password up down ca ca-str hop-interval cwnd bbr-profile'), ...tls],
+  tuic: [...words('uuid password token ip heartbeat-interval reduce-rtt request-timeout udp-relay-mode congestion-controller max-udp-relay-packet-size disable-sni version fast-open max-open-streams cwnd bbr-profile'), ...tls],
+  http: [...words('username password headers'), ...tls],
+  socks5: [...words('username password'), ...tls],
+  wireguard: words('ip ipv6 private-key public-key pre-shared-key reserved allowed-ips peers mtu remote-dns-resolve dns keepalive amnezia-wg'),
+  snell: words('psk version obfs-opts reuse'),
+  anytls: [...words('password idle-session-check-interval idle-session-timeout min-idle-session'), ...tls],
+  ssh: words('username password private-key private-key-passphrase host-key host-key-algorithms'),
+}
+const connectionOptions = new Map(Object.entries(protocols)
+  .map(([type, options]) => [type, new Set([...common, ...options])]))
+const ignoredMetadata = new Set(words('remarks remark tag source source-name airport provider subscription sub-url subscription-url subscription-token description metadata id token'))
+const requiredKeys: Record<string, string[]> = {
+  ss: ['cipher', 'password'], ssr: ['cipher', 'password', 'protocol', 'obfs'],
+  vmess: ['uuid', 'cipher'], vless: ['uuid'], trojan: ['password'], hysteria2: ['password'],
+  anytls: ['password'], snell: ['psk'], wireguard: ['private-key'], ssh: ['username'],
+}
+const ssCiphers = new Set(words('aes-128-gcm aes-192-gcm aes-256-gcm chacha20-ietf-poly1305 xchacha20-ietf-poly1305 2022-blake3-aes-128-gcm 2022-blake3-aes-256-gcm 2022-blake3-chacha20-poly1305 aes-128-cfb aes-192-cfb aes-256-cfb aes-128-ctr aes-192-ctr aes-256-ctr rc4-md5 chacha20 chacha20-ietf xchacha20 dummy none'))
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const MAX_NODES = 16000
+
+export const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
+const decode = (value: string) => decodeURIComponent(value)
+const decoder = new TextDecoder('utf-8', { fatal: true })
+
+function asText(bytes: Uint8Array) {
+  try {
+    return decoder.decode(bytes)
+  } catch {
+    throw new UserError('上游响应并非 UTF-8 文本。')
+  }
+}
+
+function base64(value: string) {
+  const normalized = value.replace(/\s+/g, '')
+  if (!normalized || !/^[a-z0-9+/_-]+={0,2}$/i.test(normalized) || normalized.replace(/=+$/, '').length % 4 === 1) {
+    throw new UserError('Base64 数据格式无效。')
+  }
+  return asText(Buffer.from(normalized, 'base64url'))
+}
+
+export function safeYaml(text: string): unknown {
+  try {
+    const document = parseDocument(text, { prettyErrors: false, uniqueKeys: true, logLevel: 'silent', schema: 'core' })
+    if (document.errors.length) throw new Error()
+    return document.toJS({ maxAliasCount: 20 })
+  } catch {
+    throw new UserError('YAML 格式无效或包含过于复杂的别名。')
+  }
+}
+
+function plain(value: unknown, depth = 0): unknown {
+  if (depth > 16) throw new UserError('节点选项的嵌套层级过多。')
+  if (value === null || ['string', 'boolean'].includes(typeof value) || Number.isFinite(value)) return value
+  if (Array.isArray(value)) return value.map(child => plain(child, depth + 1))
+  if (value && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(Object.entries(value)
+      .filter(([key]) => !['__proto__', 'constructor', 'prototype'].includes(key))
+      .map(([key, child]) => [key, plain(child, depth + 1)]))
+  }
+  throw new UserError('节点包含无法识别的选项值。')
+}
+
+export function connectionFrom(input: unknown) {
+  const node = objectValue(input)
+  if (!node || Object.getPrototypeOf(node) !== Object.prototype) throw new UserError('节点须为一组连接参数。')
+  const { name, type } = node
+  if (typeof name !== 'string' || !name.trim() || name.length > 512) throw new UserError('缺少有效的原始节点名。')
+  const allowed = typeof type === 'string' ? connectionOptions.get(type) : undefined
+  if (!allowed || typeof type !== 'string') throw new UserError('该代理协议暂不可导入。')
+  if (node['dialer-proxy']) throw new UserError('该节点依赖上游的链式代理配置。')
+  const { server } = node
+  if (typeof server !== 'string' || (!ipaddr.isValid(server) && !normalizeDomain(server))) throw new UserError('服务器域名或 IP 无效。')
+  const port = typeof node.port === 'string' && /^\d+$/.test(node.port) ? Number(node.port) : node.port
+  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) throw new UserError('节点端口须在 1–65535 范围内。')
+  const connection: Connection = {}
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'name' || ignoredMetadata.has(key.toLowerCase()) && !(type === 'tuic' && key === 'token')) continue
+    if (key === 'dialer-proxy' && !value) continue
+    const option = type === 'hysteria2' && key === 'mport' ? 'ports' : key
+    if (option !== key && Object.hasOwn(node, option)) continue
+    if (!allowed.has(option)) throw new UserError('含未识别的连接选项，未导入该节点以免丢失连接参数。')
+    connection[option] = plain(value)
+  }
+  connection.port = port
+  if (node.network && (typeof node.network !== 'string' || !words('tcp ws grpc h2 http xhttp').includes(node.network))) throw new UserError('该节点的传输方式暂不可导入。')
+  for (const key of requiredKeys[type] ?? []) {
+    if (typeof connection[key] === 'number') connection[key] = String(connection[key])
+    if (typeof connection[key] !== 'string' || !connection[key]) throw new UserError('缺少协议所需的认证或加密参数。')
+  }
+  if ((type === 'vless' || type === 'vmess') && !uuid.test(String(connection.uuid))) throw new UserError('节点 UUID 格式无效。')
+  if (type === 'vmess' && !words('auto none zero aes-128-gcm chacha20-poly1305').includes(String(connection.cipher))) {
+    throw new UserError('VMess 加密方式无效。')
+  }
+  if (type === 'ss' && !ssCiphers.has(String(connection.cipher))) throw new UserError('不支持此 Shadowsocks 加密方式。')
+  if (type === 'ss' && connection.plugin && (typeof connection.plugin !== 'string' || !words('obfs v2ray-plugin shadow-tls restls gost-plugin kcptun').includes(connection.plugin))) {
+    throw new UserError('暂不支持此 Shadowsocks 插件。')
+  }
+  if (type === 'ss' && String(connection.cipher).startsWith('2022-')) {
+    const size = String(connection.cipher).includes('128') ? 16 : 32
+    if (String(connection.password).split(':').some(key => !/^[a-z0-9+/_-]+={0,2}$/i.test(key) || Buffer.from(key, 'base64url').length !== size)) {
+      throw new UserError('Shadowsocks 2022 的密钥长度无效。')
+    }
+  }
+  if (type === 'tuic' && !(connection.token || (uuid.test(String(connection.uuid ?? '')) && connection.password))) {
+    throw new UserError('TUIC 缺少相应版本所需的认证参数。')
+  }
+  if (type === 'wireguard' && (!connection.publicKey && !connection['public-key'] && !(Array.isArray(connection.peers) && connection.peers.length))) {
+    throw new UserError('WireGuard 缺少对端公钥或对端配置。')
+  }
+  return { name, type, server, port, connection }
+}
+
+export function configHasSubscriptionSecret(config: unknown, secrets: Secrets) {
+  const { proxies, ...rest } = objectValue(config) ?? {}
+  if (containsSubscriptionSecret(rest, secrets)) return true
+  if (!Array.isArray(proxies)) return containsSubscriptionSecret(proxies, secrets)
+
+  // A node can use the same value for connection authentication and subscription downloads.
+  const linksOnly = { links: secrets.links, tokens: [] }
+  return proxies.some(node => {
+    const allowed = connectionOptions.get(node?.type)
+    if (!allowed) return containsSubscriptionSecret(node, secrets)
+    return Object.entries(node).some(([key, value]) => {
+      const protection = allowed.has(key) ? linksOnly : secrets
+      return hasSecret(key, protection) || containsSubscriptionSecret(value, protection)
+    })
+  })
+}
+
+function tcpTransport(node: Connection, params: URLSearchParams) {
+  const network = params.get('type') || 'tcp'
+  const host = params.get('host')
+  const path = params.get('path')
+  node.network = network
+  if (network === 'ws') node['ws-opts'] = { path: path || '/', ...(host ? { headers: { Host: host } } : {}) }
+  else if (network === 'grpc') node['grpc-opts'] = { 'grpc-service-name': params.get('serviceName') || path || '' }
+  else if (network === 'http' || network === 'h2') {
+    node[network + '-opts'] = network === 'h2'
+      ? { path: path || '/', ...(host ? { host: host.split(',') } : {}) }
+      : { path: [path || '/'], ...(host ? { headers: { Host: host.split(',') } } : {}) }
+  } else if (network === 'xhttp' || params.get('headerType') === 'http' || params.get('extra')) {
+    throw new UserError('该分享链接使用了暂未支持的高级传输选项。')
+  }
+}
+
+function tlsTransport(node: Connection, params: URLSearchParams, force = false) {
+  const security = params.get('security')
+  if (security && !['none', 'tls', 'reality'].includes(security)) throw new UserError('不支持此 TLS 类型。')
+  if (force || security === 'tls' || security === 'reality') node.tls = true
+  const servername = params.get('sni') || params.get('peer')
+  if (servername) node[node.type === 'vless' || node.type === 'vmess' ? 'servername' : 'sni'] = servername
+  if (/^(1|true)$/i.test(params.get('insecure') || params.get('allowInsecure') || '')) node['skip-cert-verify'] = true
+  if (params.has('fp')) node['client-fingerprint'] = params.get('fp')
+  if (params.has('alpn')) node.alpn = params.get('alpn')!.split(',')
+  if (params.has('pinSHA256')) node.fingerprint = params.get('pinSHA256')
+  if (security === 'reality') {
+    if (!params.get('pbk')) throw new UserError('Reality 分享链接缺少公钥。')
+    node['reality-opts'] = { 'public-key': params.get('pbk'), 'short-id': params.get('sid') || '' }
+  }
+}
+
+function parseSS(value: string) {
+  const hash = value.indexOf('#')
+  const name = hash < 0 ? '' : decode(value.slice(hash + 1))
+  let address = value.slice(5, hash < 0 ? undefined : hash)
+  if (!address.includes('@')) address = base64(address)
+  const separator = address.lastIndexOf('@')
+  if (separator < 0) throw new UserError('Shadowsocks 分享链接格式无效。')
+  let login = decode(address.slice(0, separator))
+  if (!login.includes(':')) login = base64(login)
+  const colon = login.indexOf(':')
+  if (colon < 0) throw new UserError('Shadowsocks 分享链接缺少密码。')
+  const uri = new URL('ss://' + address.slice(separator + 1))
+  const node: Connection = { name, type: 'ss', server: uri.hostname.replace(/^\[|\]$/g, ''), port: Number(uri.port), cipher: login.slice(0, colon), password: login.slice(colon + 1), udp: true }
+  const plugin = uri.searchParams.get('plugin')
+  if (plugin) {
+    const [type, ...params] = plugin.split(';')
+    const options = new Map<string, string | boolean>(params.map(entry => {
+      const index = entry.indexOf('=')
+      return index < 0 ? [entry, true] : [entry.slice(0, index), entry.slice(index + 1)]
+    }))
+    if (type === 'obfs-local' || type === 'simple-obfs') {
+      node.plugin = 'obfs'
+      node['plugin-opts'] = { mode: options.get('obfs'), host: options.get('obfs-host') }
+    } else if (type === 'v2ray-plugin') {
+      node.plugin = type
+      node['plugin-opts'] = { mode: 'websocket', ...Object.fromEntries(options) }
+    } else throw new UserError('该分享链接的 Shadowsocks 插件暂不可导入。')
+  }
+  return node
+}
+
+const endpointName = (server: string, port: unknown) => (server.includes(':') && !server.startsWith('[') ? '[' + server + ']' : server) + ':' + port
+
+function parseSSR(value: string) {
+  const [endpoint, query] = base64(value.slice(6)).split('/?')
+  const parts = /^(.+):(\d+):([^:]+):([^:]+):([^:]+):([a-z0-9_+=-]+)\/?$/i.exec(endpoint)
+  if (!parts) throw new UserError('ShadowsocksR 分享链接格式无效。')
+  const [, host, port, protocol, cipher, obfs, password] = parts
+  const params = new URLSearchParams(query)
+  const node: Connection = {
+    name: params.get('remarks') ? base64(params.get('remarks')!) : endpointName(host, port),
+    type: 'ssr', server: host.replace(/^\[|\]$/g, ''), port: Number(port),
+    protocol, cipher, obfs, password: base64(password), udp: true,
+  }
+  if (params.get('protoparam')) node['protocol-param'] = base64(params.get('protoparam')!)
+  if (params.get('obfsparam')) node['obfs-param'] = base64(params.get('obfsparam')!)
+  return node
+}
+
+function parseVMess(value: string) {
+  const json = JSON.parse(base64(value.slice(8)))
+  const node = {
+    type: 'vmess', name: json.ps, server: json.add, port: Number(json.port),
+    uuid: json.id, alterId: Number(json.aid ?? 0), cipher: json.scy || 'auto', udp: true,
+  }
+  const params = new URLSearchParams({
+    type: json.net || 'tcp', headerType: json.type || '', host: json.host || '', path: json.path || '',
+    security: json.tls === 'tls' ? 'tls' : 'none', sni: json.sni || '',
+  })
+  if (json.fp) params.set('fp', json.fp)
+  if (json.alpn) params.set('alpn', json.alpn)
+  tcpTransport(node, params)
+  tlsTransport(node, params)
+  return node
+}
+
+function uriNode(value: string) {
+  if (value.startsWith('ss://')) return parseSS(value)
+  if (value.startsWith('ssr://')) return parseSSR(value)
+  if (value.startsWith('vmess://')) return parseVMess(value)
+  const uri = new URL(value)
+  const scheme = uri.protocol.slice(0, -1)
+  const type = scheme === 'hy2' ? 'hysteria2' : scheme === 'socks' ? 'socks5' : scheme
+  if (!['vless', 'trojan', 'hysteria2', 'socks5', 'anytls'].includes(type)) throw new UserError('该分享链接协议暂不可导入。')
+  const node: Connection = { name: decode(uri.hash.slice(1)), type, server: uri.hostname.replace(/^\[|\]$/g, ''), port: Number(uri.port || 443), udp: true }
+  const params = uri.searchParams
+  if (type === 'socks5') {
+    if (uri.username) node.username = decode(uri.username)
+    if (uri.password) node.password = decode(uri.password)
+    return node
+  }
+  if (type === 'vless') {
+    node.uuid = decode(uri.username)
+    if (params.get('flow')) node.flow = params.get('flow')
+    if (params.get('encryption') && params.get('encryption') !== 'none') node.encryption = params.get('encryption')
+    if (params.get('packetEncoding')) node['packet-encoding'] = params.get('packetEncoding')
+  } else node.password = decode(uri.username + (uri.password ? ':' + uri.password : ''))
+  if (type === 'vless' || type === 'trojan') tcpTransport(node, params)
+  if (type === 'hysteria2') {
+    if (params.get('obfs')) node.obfs = params.get('obfs')
+    if (params.get('obfs-password')) node['obfs-password'] = params.get('obfs-password')
+    if (params.get('mport')) node.ports = params.get('mport')
+  }
+  tlsTransport(node, params, type !== 'vless')
+  return node
+}
+
+function stable(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stable)
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stable((value as Record<string, unknown>)[key])]))
+  }
+  return value
+}
+export const compareDigest = (value: unknown) => digest(JSON.stringify(stable(value)))
+
+export function parseSource(bytes: Uint8Array, urls: string[], inputFormat?: 'yaml' | 'links'): SourceData & { urls: string[] } {
+  const content = asText(bytes)
+  let text = content.trim()
+  if (!text) throw new UserError('订阅返回空内容。')
+  let entries: unknown[]
+  let providers: string[] = []
+  let format = 'Mihomo YAML'
+  if (inputFormat !== 'yaml') {
+    const linkLine = /^[ \t]*[a-z0-9-]+:\/\//im
+    const plainLinks = inputFormat === 'links' ? linkLine.test(text) : /^[a-z0-9-]+:\/\//i.test(text)
+    if (plainLinks) format = '节点分享链接'
+    else {
+      let decoded
+      try { decoded = base64(text) } catch { /* The original text may be YAML. */ }
+      if (decoded && linkLine.test(decoded)) {
+        text = decoded
+        format = 'Base64 分享链接'
+      } else if (inputFormat === 'links') {
+        throw new UserError('请粘贴每行一条的节点分享链接，或 Base64 编码的分享链接列表。')
+      }
+    }
+  }
+  if (format === 'Mihomo YAML') {
+    if (!inputFormat && /^</.test(text)) throw new UserError('上游返回网页而非订阅数据，请检查链接是否已过期。')
+    const config = safeYaml(content)
+    const candidates = Array.isArray(config) ? config : objectValue(config)?.proxies
+    providers = Object.keys(objectValue(objectValue(config)?.['proxy-providers']) ?? {})
+    if (!Array.isArray(candidates)) {
+      if (providers.length) throw new UserError('订阅仅提供外部代理集合，当前需要直接包含节点的订阅。')
+      throw new UserError(inputFormat === 'yaml' ? 'YAML 配置需要包含 proxies 节点列表，或使用节点数组。' : '无法识别订阅格式，请选择 Mihomo/Clash YAML 或节点分享链接。')
+    }
+    entries = candidates
+  } else {
+    entries = text.split(/\r\n?|\n/).map(line => line.trim()).filter(Boolean)
+  }
+  if (entries.length > MAX_NODES) throw new UserError('单个订阅源最多支持 16,000 个节点。')
+  const nodes: (Omit<RawNode, 'id'> & { key: string })[] = []
+  const secrets = subscriptionSecrets(urls)
+  const rejected = providers.map((_, index) => ({ item: '代理集合 ' + (index + 1), reason: '集合中的外部代理未导入，请使用直接包含节点的订阅。' }))
+  const counts = new Map()
+  for (const [index, entry] of entries.entries()) {
+    try {
+      const raw = objectValue(format === 'Mihomo YAML' ? entry : uriNode(String(entry)))
+      if (raw && inputFormat === 'links' && (raw.name == null || raw.name === '') && typeof raw.server === 'string') {
+        raw.name = endpointName(raw.server, raw.port)
+      }
+      const node = connectionFrom(raw)
+      const fingerprint = compareDigest(node.connection)
+      const key = digest(node.name).slice(0, 32)
+      const record = { name: node.name, type: node.type, region: identifyRegion(node.name), connection: node.connection, fingerprint, key }
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+      nodes.push(record)
+    } catch (error) {
+      const name = objectValue(entry)?.name
+      const item = typeof name === 'string' && !hasSecret(name, secrets)
+        ? '第 ' + (index + 1) + ' 项 · ' + name.slice(0, 128)
+        : '第 ' + (index + 1) + ' 项'
+      rejected.push({ item, reason: error instanceof UserError ? error.message : '无法解析该节点分享参数。' })
+    }
+  }
+  const seen = new Map()
+  const identified = nodes.map(({ key, ...node }) => {
+    const base = counts.get(key) > 1 ? key.slice(0, 16) + node.fingerprint.slice(0, 16) : key
+    const occurrence = (seen.get(base) ?? 0) + 1
+    seen.set(base, occurrence)
+    return { ...node, id: occurrence > 1 ? base + '-' + occurrence : base }
+  })
+  return { total: entries.length, format, nodes: identified, rejected, urls }
+}
+
+export function parseProvider(bytes: Uint8Array, provider: Pick<Provider, 'behavior' | 'format'>): ProviderData {
+  const content = asText(bytes)
+  const entries = provider.format === 'yaml'
+    ? objectValue(safeYaml(content))?.payload
+    : content.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith('#') && !line.startsWith('//'))
+  if (!Array.isArray(entries) || !entries.length) throw new UserError('规则集为空或缺少 payload 列表。请核对文件格式。')
+  if (entries.length > 100000) throw new UserError('规则集条目超过 100,000 条。')
+  const payload = entries.map((entry, index) => {
+    if (typeof entry !== 'string' || entry.length > 2048) throw new UserError('第 ' + (index + 1) + ' 条规则集内容格式不正确。')
+    const value = entry.trim()
+    if (provider.behavior === 'ipcidr' && parseRange(value)) return value
+    if (provider.behavior === 'domain') {
+      const prefix = value.match(/^(?:\*|\+)?\./)?.[0] ?? ''
+      const suffix = normalizeDomain(value.slice(prefix.length))
+      if (suffix) return prefix + suffix
+    }
+    if (provider.behavior === 'classical') {
+      const parsed = classicalEntry(value)
+      if (parsed) return parsed
+    }
+    throw new UserError('第 ' + (index + 1) + ' 条规则与所选规则集类型不兼容。')
+  })
+  return { behavior: provider.behavior, payload }
+}

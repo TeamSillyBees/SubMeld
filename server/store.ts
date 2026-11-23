@@ -29,7 +29,7 @@ export function openStore(directory: string) {
   const remove = db.prepare('DELETE FROM documents WHERE space = ? AND key = ?')
   const clear = db.prepare('DELETE FROM documents WHERE space = ?')
   const versionSummaries = db.prepare(`
-    SELECT json_remove(data, '$.yaml', '$.recipe', '$.view') AS data
+    SELECT json_remove(data, '$.yaml', '$.recipe', '$.view', '$.qualitySnapshot') AS data
     FROM documents WHERE space = ? ORDER BY key DESC LIMIT ? OFFSET ?
   `)
   const listeners = new Set<(space?: string, key?: string) => void>()

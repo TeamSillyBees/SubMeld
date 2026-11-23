@@ -1,3 +1,4 @@
+import { qualityKey, surfaces } from '../shared/quality.ts'
 import type { Profile, Version } from '../shared/model.ts'
 import type { Store } from './store.ts'
 import type { DocumentRow } from './records.ts'
@@ -20,6 +21,11 @@ const profileSchema = z.object({
   publishedRevision: z.number().int().positive().nullable(), active: z.number().int().positive().nullable(),
   renewalNotices: z.array(z.object({ id, date: z.iso.date(), expire: z.number().int().positive().nullable() })).optional(),
 })
+const metric = z.number().nonnegative().nullable()
+const snapshotSchema = z.strictObject({ reportId: z.uuid(), rows: z.record(qualityKey, z.strictObject({
+  available: z.boolean(), httpsMs: metric, tlsMs: metric, lossRate: z.number().min(0).max(1).nullable(),
+  speedMbps: metric, speedFailed: z.boolean(), reachable: z.array(z.enum(surfaces)).max(surfaces.length).nullable(),
+})) })
 const counter = z.number().int().nonnegative()
 const subscriptionInfoSchema = z.object({
   upload: counter.optional(), download: counter.optional(), total: counter.optional(),
@@ -71,6 +77,10 @@ function validateVersion(input: unknown, secrets: Secrets): asserts input is Ver
   if (!version || typeof version.seq !== 'number' || !Number.isInteger(version.seq) || version.seq < 1 || typeof version.yaml !== 'string'
     || !Array.isArray(view?.nodes) || !Array.isArray(view?.rules)
     || !Array.isArray(view?.groups) || !version.counts) throw new Error()
+  if (version.qualitySnapshot != null) {
+    const snapshot = snapshotSchema.parse(version.qualitySnapshot)
+    if (snapshot.reportId !== version.qualityReportId) throw new Error()
+  } else if (version.qualityReportId != null) throw new Error()
   const config = objectValue(safeYaml(version.yaml))
   if (!config || Object.keys(config).some(key => !topLevel.has(key))
     || !Array.isArray(config.proxies) || !Array.isArray(config['proxy-groups']) || !Array.isArray(config.rules)

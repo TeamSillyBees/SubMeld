@@ -34,6 +34,8 @@ function memberName(member: GroupMember, draft: Draft, nodeNames: Map<string, st
     member.regions.length ? member.regions.map(regionLabel).join('、') : '全部地区',
     member.includeRegex && '包含 /' + member.includeRegex + '/',
     member.excludeRegex && '排除 /' + member.excludeRegex + '/',
+    member.quality && '按质量报告筛选', member.search && '搜索「' + member.search + '」',
+    member.nodeKeys && '限定 ' + member.nodeKeys.length + ' 个节点',
   ].filter(Boolean).join(' · ')
 }
 
@@ -83,10 +85,12 @@ function GroupEditor({ group, onClose, inline, onCopy, onRemove, onDirtyChange }
     ...state.draft,
     groups: group ? state.draft.groups.map(item => item.id === group.id ? form : item) : [...state.draft.groups, form],
   }), [form, group?.id, state.draft])
-  const computed = useMemo(() => projection(draft, state), [draft, state])
+  const { quality } = useProject()
+  const computed = useMemo(() => projection(draft, state, quality.snapshot), [draft, state, quality.snapshot])
   const members = computed.groups.find(item => item.id === form.id)?.members ?? []
   const nodeNames = useMemo(() => new Map(view.nodes.map(node => [node.key, node.name])), [view.nodes])
-  const issues = computed.issues.filter(issue => issue.pane === 'groups' && issue.id === form.id)
+  const awaitingQuality = !quality.ready && form.members.some(m => m.kind === 'pool' && m.quality)
+  const issues = computed.issues.filter(issue => issue.pane === 'groups' && issue.id === form.id && !(awaitingQuality && ['group-empty', 'pool-quality-empty'].includes(issue.code)))
   const matched = view.nodes.filter(node => node.kept && (!nodeSource || node.sourceId === nodeSource) && (searchable(node.name, query) || searchable(node.sourceName, query) || searchable(regionLabel(node.region), query)))
   const [offset, setOffset] = usePage(matched.length, 20)
   const [previewOffset, setPreviewOffset] = usePage(members.length, 25)
@@ -224,13 +228,13 @@ function GroupEditor({ group, onClose, inline, onCopy, onRemove, onDirtyChange }
             </div>
           </li>
         })}</ol> : <p className="muted">可添加节点、代理组或内置策略。</p>}
-        {(form.members.length > 0 || group) && <Disclosure compact title={<span className="member-preview-heading">预览代理列表 <span className="member-counts">{memberSummary(members)}</span></span>}>
+        {!awaitingQuality && (form.members.length > 0 || group) && <Disclosure compact title={<span className="member-preview-heading">预览代理列表 <span className="member-counts">{memberSummary(members)}</span></span>}>
           {members.length ? <ol className="compact-list preview-members" start={previewOffset + 1}>{members.slice(previewOffset, previewOffset + 25).map((member, i) => <li key={member.key} value={previewOffset + i + 1}>{member.name}</li>)}</ol>
             : <p className="muted">暂无可用代理。</p>}
           {members.length > 25 && <Pager offset={previewOffset} pageSize={25} count={members.length} onChange={setPreviewOffset} />}
         </Disclosure>}
         {issues.filter(issue => issue.code !== 'group-empty' || form.members.length || group).map((issue, index) =>
-          <Alert tone={issue.code === 'group-empty' ? 'warning' : 'danger'} key={index}>{issue.message}</Alert>)}
+          <Alert tone={issue.severity === 'warning' || issue.code === 'group-empty' ? 'warning' : 'danger'} key={index}>{issue.message}</Alert>)}
       </section>
       <Disclosure title="高级组参数"><FieldGroup>
         {form.type !== 'select' && <>

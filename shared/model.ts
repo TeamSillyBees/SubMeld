@@ -1,3 +1,4 @@
+import type { QualitySnapshot } from './quality-snapshot.ts'
 import type { z } from 'zod'
 import type * as schema from '../server/schema.ts'
 
@@ -199,6 +200,7 @@ export interface PublishedEntry extends RecordSummary {
 export interface VersionSummary {
   seq: number
   at: string
+  qualityReportId?: string | null
   kind: 'publish' | 'auto' | 'rollback'
   parent: number | null
   counts: Counts
@@ -256,4 +258,4 @@ export interface Profile {
   renewalNotices?: { id: string; date: string; expire: number | null }[]
 }
 
-export interface Version extends VersionSummary { yaml: string; view: Projection; recipe: Draft }
+export interface Version extends VersionSummary { qualitySnapshot?: QualitySnapshot | null; yaml: string; view: Projection; recipe: Draft }

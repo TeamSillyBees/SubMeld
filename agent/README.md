@@ -1,6 +1,6 @@
 # SubMeld PC 探针
 
-把探针安装在经常开机的个人电脑上，即可从这台电脑测量订阅节点。每个方案配对一台电脑。服务在开机后自动运行，空闲时每 15 秒向工作台查询任务，领取任务后才启动 Mihomo。
+把探针安装在经常开机的个人电脑上，即可从这台电脑测量订阅节点。同一方案可配对多台电脑，并为每台设置备注名。服务在开机后自动运行，空闲时每 15 秒向工作台查询任务，领取任务后才启动 Mihomo。
 
 ## 安装和配对
 
@@ -26,9 +26,9 @@ sudo submeld-probe install
 
 ## 创建检测任务
 
-在「节点管理 → 质量检测」选择「已勾选」或「当前筛选」。筛选范围包括全部分页，单次最多 1,024 个节点。选择采样轮数和可选的下载测速、AI 平台检测，再点击「创建检测任务」。开启下载测速时，面板会显示本批的下载流量上限。
+在「节点管理 → 质量检测」选择「已勾选」或「当前筛选」。筛选范围包括全部分页，单次最多 1,024 个节点。选择执行探针、采样轮数和可选的下载测速、AI 平台检测，再点击「创建检测任务」。开启下载测速时，面板会显示本批的下载流量上限。
 
-同一方案可保留一个待领取或运行中的任务。离线期间新建的任务最多等待 24 小时。电脑恢复连接后自动领取，断网期间会逐步延长重试间隔，最长为 5 分钟。工作台显示检测进度、节点详情和可导出的 JSON 报告。运行中断后，两分钟没有进度的任务会标记为失败，需要重新创建才会再次消耗检测流量。
+每台探针同时执行一个任务。等待期间可改派空闲在线探针或取消任务。离线期间新建的任务最多等待 24 小时。电脑恢复连接后自动领取，断网期间会逐步延长重试间隔，最长为 5 分钟。工作台显示检测进度、节点详情和可导出的 JSON 报告。运行中断后，两分钟没有进度的任务会标记为失败，需要重新创建才会再次消耗检测流量。
 
 每次检测使用独立的临时 Mihomo 工作目录，一个节点对应一个带随机口令的回环 HTTP 端口。探针通过绑定的出站发送请求。若日常客户端启用了系统级 TUN，外层连接仍受系统路由影响。需要使用特定网卡时，可在运行 `submeld-probe install` 的环境中设置 `SUBMELD_PROBE_INTERFACE` 为网卡名称，并核对客户端的路由规则。[Mihomo 监听器配置](https://wiki.metacubex.one/en/config/inbound/listeners/)
 
@@ -37,7 +37,7 @@ sudo submeld-probe install
 - 在两种系统上运行 `submeld-probe status` 可查看服务状态和开机自启状态。
 - Windows 的日志和本地报告分别位于 `%ProgramData%\SubMeldProbe\logs` 和 `%ProgramData%\SubMeldProbe\reports`。Linux 使用 `journalctl -u submeld-probe.service` 查看日志，本地报告在 `/var/lib/submeld-probe/reports/`。
 - 更新时下载新版安装包，在任务空闲时再次运行本系统的两条安装命令。已有配对会沿用，服务运行文件和 Node.js 副本会更新。
-- 要更换电脑，在工作台展开常驻探针并选择「解除配对」。当前常驻任务会取消。新电脑使用新的配对链接。已安装的电脑可以运行 `submeld-probe install --pair` 重新登记。Linux 安装、更新和卸载命令前加 `sudo`。
+- 要更换电脑，在工作台展开常驻探针并选择「解除配对」。这台探针的待执行和运行中任务会取消。新电脑使用新的配对链接。已安装的电脑可以运行 `submeld-probe install --pair` 重新登记。Linux 安装、更新和卸载命令前加 `sudo`。
 - 卸载时先运行 `submeld-probe uninstall`，再运行 `npm uninstall --global submeld-quality-probe`。已有报告保存在数据目录。电脑离线卸载时，还需在工作台解除原配对。
 
 ## 检测口径
@@ -54,12 +54,14 @@ sudo submeld-probe install
 
 ## AI 平台判定
 
-探针使用 Impit 的固定 Chrome TLS 配置访问公开入口。每个已知出口 IP 只检测一次，未知 IP 的节点分别检测。每次最多并行检测两个出口，每个出口最多三个入口请求。结果记录响应状态、判定依据和 `needsReview`。[Impit 协议客户端](https://github.com/apify/impit)
+探针使用 Impit 的固定 Chrome TLS 配置访问公开入口。同批的每个出口 IP 优先选择延迟最低的合格节点检测一次，其余同出口节点复用结果。缺少出口、丢包率达到 50% 或 HTTPS 中位延迟达到 4 秒的节点跳过独立 AI 请求。流量和到期提示条目在启动核心前识别。每次最多并行检测两个出口，每个出口最多三个入口请求。结果记录响应状态、判定依据和 `needsReview`。[Impit 协议客户端](https://github.com/apify/impit)
 
-- **ChatGPT** 分别检查 Web 首页与官方 Android App 域名。App 入口只返回通用 404 或拒绝响应时标记待复核。[OpenAI 网络域名说明](https://help.openai.com/en/articles/9247338-network-recommendations-for-chatgpt-errors-on-web-and-apps)
-- **Gemini** 检查 Web 入口，并用相同出站读取 YouTube 页面中 Google 的地区标记。Google 识别地区与出口不一致、个人账号适用性待确认或地区缺失时，标记人工复核。[Gemini 支持地区](https://support.google.com/gemini/answer/13575153)
-- **Claude** 分别检查 Web 首页与 Models API。未携带密钥收到明确的认证错误，会显示「需要登录」并保留 HTTP 状态。[Claude API 错误说明](https://platform.claude.com/docs/en/api/errors)
-- **Grok** 区分明确地区限制、Cloudflare 挑战、明确 IP 封禁、限频及未知拒绝。遇到挑战时记录该响应，交由浏览器复核。[Cloudflare 挑战响应](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/)
+- **ChatGPT** Web 读取合规 Cookie 接口的 JSON，有地区字段时回填。App 根据入口响应中的 VPN、地区限制和加载失败提示判定。[OpenAI 网络域名说明](https://help.openai.com/en/articles/9247338-network-recommendations-for-chatgpt-errors-on-web-and-apps)
+- **Gemini** 访问英文入口，携带同意偏好 Cookie，从页面读取 Google 的地区标记。对于个人账号，Google 识别为中国大陆或俄罗斯时记为地区受限。这两个地区的出口收到 403 也记为地区受限，其他出口收到 403 记为不可用。地区标记缺失，或标记与出口不一致且无法据此确定地区限制时，保留复核提示。[Gemini 网页版支持地区](https://support.google.com/gemini/answer/13575153?hl=en)
+- **Claude** 分别检查 Web 首页与 Models API。API 返回缺少密钥的 401、Web 跳转到官方登录页时记为入口可达。官方地区不可用页记为地区受限。[Claude API 错误说明](https://platform.claude.com/docs/en/api/errors)
+- **Grok** 区分明确地区限制、Cloudflare 挑战、明确 IP 封禁、限频及未知拒绝。遇到挑战时记录该响应，保留人工复核标记。[Cloudflare 挑战响应](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/)
+
+连接失败直接记录为网络错误。OpenAI、Claude 返回 403 且出口位于已知限制地区时记为地区受限。报告按出口 IP 去重，展示 AI 检测覆盖数、待复核数和待复核占全部出口的比例。若部分出口跳过 AI 检测，同时显示待复核占已测出口的比例。
 
 「入口可达」表示本次请求观察到了产品入口。登录、账号资格和实际模型调用需要在对应产品中确认。
 
@@ -67,4 +69,4 @@ sudo submeld-probe install
 
 格式版本为 `schemaVersion: 1`。每份报告包含任务 ID、时间、测试配置和 `results` 数组。每行保留节点标识、来源、正式采样、聚合指标、出口、下载结果与各平台判定。时间单位为毫秒，`lossRate` 取值为 0–1，`averageBps`、`peakBps` 与 `perSecondBps` 的单位均为字节每秒。跳过或缺乏依据的字段使用 `null`。
 
-工作台为每个配置方案保存最近 12 次任务。关闭页面后探针继续运行。在工作台取消任务后，探针会停止本次测量并继续等待后续任务。检测记录通过 JSON 单独归档，配置备份保存订阅编排数据。
+工作台保留近期检测记录和所有活动任务。已发布版本单独保存所用报告 ID 和筛选所需指标，支持回滚与后续订阅刷新。关闭页面后探针继续运行。在工作台取消任务后，探针会停止本次测量并继续等待后续任务。检测记录通过 JSON 单独归档，配置备份保存订阅编排数据。

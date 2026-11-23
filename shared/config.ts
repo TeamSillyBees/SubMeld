@@ -1,7 +1,8 @@
 import type { Base, Draft, EvaluatedRule, FilteredNode, Group, Issue, MatchResult, MihomoConfig, ProjectedMember, Projection, ProviderData, ProviderMap, ReportIssue, Rule, RuleProvider, Source, SourceData, SourceMap } from './model.ts'
 import ipaddr from 'ipaddr.js'
 import { builtins, regionLabel, reservedNames, ruleTypes } from './catalog.ts'
-import { compilePoolFilter, memberSourceIds } from './group-filter.ts'
+import type { QualitySnapshot } from './quality-snapshot.ts'
+import { resolvePool, memberSourceIds } from './group-filter.ts'
 import { isCatalogRuleSet, publicRuleProvider } from './rule-sets.ts'
 
 const invalidRuleChars = /[,\u0000-\u001f\u007f]/
@@ -156,7 +157,7 @@ export function structuralGroupIssues(draft: Draft) {
   return issues
 }
 
-function checkGroups(draft: Draft, rows: FilteredNode[], issue: ReportIssue) {
+function checkGroups(draft: Draft, rows: FilteredNode[], issue: ReportIssue, quality: QualitySnapshot | null) {
   const byGroup = new Map(draft.groups.map(group => [group.id, group]))
   const nodes = new Map(rows.map(row => [row.key, row]))
   const retained = rows.filter(row => row.kept)
@@ -173,9 +174,13 @@ function checkGroups(draft: Draft, rows: FilteredNode[], issue: ReportIssue) {
     }
     for (const member of group.members) {
       if (member.kind === 'pool') {
-        const filter = compilePoolFilter(member)
+        const filter = resolvePool(member, retained, quality)
         if (filter.includeError || filter.excludeError) addIssue('group-filter', filter.includeError ? '包含正则：' + filter.includeError : '排除正则：' + filter.excludeError)
-        else for (const row of retained) if (filter.matches(row)) add(row.key, row.name, 'node')
+        else {
+          if (filter.emptied && group.enabled) issue('warning', 'groups', group.id, 'pool-quality-empty',
+            '「' + group.name + '」的质量条件排除了全部 ' + filter.candidates.length + ' 个候选节点。' + (filter.fallback ? '已按来源、地区和名称条件兜底。' : '请调整阈值或补测节点。'))
+          for (const row of filter.matches) add(row.key, row.name, 'node')
+        }
       }
       if (member.kind === 'node') {
         const row = nodes.get(nodeKey(member.sourceId, member.id))
@@ -387,9 +392,9 @@ function networkConfig(base: Base) {
   }
 }
 
-export function evaluate(draft: Draft, sourceData: SourceMap, ruleData: ProviderMap, withConfig: true): Projection & { config: MihomoConfig }
-export function evaluate(draft: Draft, sourceData: SourceMap, ruleData?: ProviderMap, withConfig?: false): Projection
-export function evaluate(draft: Draft, sourceData: SourceMap, ruleData: ProviderMap = {}, withConfig = false): Projection & { config?: MihomoConfig } {
+export function evaluate(draft: Draft, sourceData: SourceMap, ruleData: ProviderMap, withConfig: true, quality?: QualitySnapshot | null): Projection & { config: MihomoConfig }
+export function evaluate(draft: Draft, sourceData: SourceMap, ruleData?: ProviderMap, withConfig?: false, quality?: QualitySnapshot | null): Projection
+export function evaluate(draft: Draft, sourceData: SourceMap, ruleData: ProviderMap = {}, withConfig = false, quality: QualitySnapshot | null = null): Projection & { config?: MihomoConfig } {
   const issues: Issue[] = []
   const issue: ReportIssue = (severity, pane, id, code, message, relatedId) => issues.push({ severity, pane, id, code, message, relatedId })
   const rows = []
@@ -428,7 +433,7 @@ export function evaluate(draft: Draft, sourceData: SourceMap, ruleData: Provider
       issue('error', 'nodes', row.sourceId, 'node-name', '节点「' + row.name + '」的最终名称使用了保留名称或包含控制字符。请调整名称前缀或排除此节点。', row.id)
     }
   }
-  const groups = checkGroups(draft, rows, issue)
+  const groups = checkGroups(draft, rows, issue, quality)
   const { rules, ruleProviders } = checkRules(draft, ruleData, issue)
   issues.push(...networkIssues(draft.base, rules))
   const counts = { sources: sources.filter(source => source.enabled).length, nodes: retained.length, groups: groups.filter(group => group.enabled).length, rules: rules.length }

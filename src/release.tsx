@@ -7,6 +7,7 @@ import { Button as ButtonRoot } from '@/components/ui/button'
 import { regionLabel, ruleTypes } from '../shared/catalog.ts'
 import { ConfigSummary } from './dashboard.tsx'
 import { useConfirm } from './confirm.tsx'
+import { QualityBaselinePicker } from './quality-baseline.tsx'
 import { useProject, useSearchValue } from './project.tsx'
 import { NodeNames } from './sources.tsx'
 import { Alert, Badge, Button, ButtonLink, CopyLinkButton, Disclosure, Empty, IssueList, Modal, NativeSelect, NativeSelectOption, PageTitle, Pager, Panel, RouteLink, Schedule, SearchBox, Segmented, SourceStatus, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TimeLabel, formatNumber, formatTime, searchable, useListPage, usePage, versionKind, versionLabel } from './ui.tsx'
@@ -64,7 +65,9 @@ function PublishedVersion({ state, download, heading }: { state: WorkspaceState;
 }
 
 export function PublishPage() {
-  const { state, view, pathFor, call, applyState, reload, notify } = useProject()
+  const { state, view, pathFor, call, applyState, reload, notify, quality } = useProject()
+  const hasQualityPools = state.draft.groups.some(g => g.enabled && g.members.some(m => m.kind === 'pool' && m.quality))
+  const reportChanged = hasQualityPools && !!state.current && quality.ready && quality.reportId !== (state.current.qualityReportId ?? null)
   const confirm = useConfirm()
   const [checked, setChecked] = useState<{ revision: number; view: View; result: Projection } | null>(null)
   const [history, setHistory] = useState<{ offset: number; rows: VersionSummary[]; error?: string } | null>(null)
@@ -86,7 +89,7 @@ export function PublishPage() {
   const currentPreview = current?.seq === version ? current : null
   const preview = mode === 'current' ? currentPreview?.projection : view
   const released = version ? <PublishedVersion state={state} download={pathFor('download')} heading={publishedHeading} /> : null
-  const hasDraftChanges = state.dirty || !version
+  const hasDraftChanges = state.dirty || !version || reportChanged
 
   useEffect(() => {
     if (!version) return
@@ -97,18 +100,18 @@ export function PublishPage() {
   }, [version, historyOffset, historyAttempt, call])
 
   useEffect(() => {
-    if (mode !== 'current' || version === undefined) return
+    if (mode !== 'current' && !hasQualityPools || version === undefined) return
     let active = true
     call('current').then(value => { if (active) setCurrent({ seq: version, projection: value }) })
       .catch(error => { if (active) setCurrent({ seq: version, error: error.message }) })
     return () => { active = false }
-  }, [mode, version, previewAttempt, call])
+  }, [mode, version, previewAttempt, hasQualityPools, call])
 
   async function runCheck() {
     setError('')
     setBusy('check')
     try {
-      const next = await call('check', {})
+      const next = await call('check', { qualityReportId: quality.reportId })
       setChecked({ revision: next.revision, view, result: next })
     } catch (cause) { const error = asError(cause); setError(error.message) } finally { setBusy('') }
   }
@@ -119,7 +122,7 @@ export function PublishPage() {
     setBusy('publish')
     setError('')
     try {
-      const next = await call('publish', { revision: state.revision })
+      const next = await call('publish', { revision: state.revision, qualityReportId: quality.reportId })
       applyState(next)
       setChecked(null)
       setMode('current')
@@ -142,15 +145,30 @@ export function PublishPage() {
       notify('已回滚至 ' + versionLabel(target) + ' 的内容')
     } catch (cause) { const error = asError(cause); notify(error.message, 'danger') } finally { setBusy('') }
   }
+  const previousGroups = new Map(currentPreview?.projection?.groups.map(g => [g.id, g]))
+  const differences = view.groups.flatMap(g => {
+    if (!state.draft.groups.find(group => group.id === g.id)?.members.some(m => m.kind === 'pool' && m.quality)) return []
+    const previous = new Map(previousGroups.get(g.id)?.members.map(m => [m.key, m.name]))
+    const next = new Map(g.members.map(m => [m.key, m.name]))
+    return [{ name: g.name, add: [...next].filter(([key, name]) => previous.get(key) !== name).map(([, name]) => name),
+      remove: [...previous].filter(([key, name]) => next.get(key) !== name).map(([, name]) => name) }]
+  })
   const historyPage = history?.offset === historyOffset ? history : null
   return <div className="stack">
     <PageTitle title="配置发布" />
     {!state.dirty && released}
+    {hasQualityPools && <Panel title="代理组质量差异" actions={<QualityBaselinePicker />}>
+      <div className="panel-padding quality-differences">{reportChanged && <p>所选报告与线上版本使用的报告不同，发布后将采用以下成员。</p>}
+        {currentPreview?.error ? <Alert tone="danger" action={<Button size="small" onClick={() => setPreviewAttempt(v => v + 1)}>重试</Button>}>{currentPreview.error}</Alert>
+          : version && !currentPreview?.projection || !quality.ready ? <p role="status">正在读取质量基准…</p> : differences.map(g => <Disclosure key={g.name} title={g.name + ' · 新增 ' + g.add.length + ' · 移出 ' + g.remove.length}>
+            {!!g.add.length && <p>新增成员　{g.add.join('、')}</p>}{!!g.remove.length && <p>移出成员　{g.remove.join('、')}</p>}{!g.add.length && !g.remove.length && <p>成员与线上版本一致。</p>}
+          </Disclosure>)}
+      </div></Panel>}
     <Panel className="review-panel" title="配置检查"
       detail={state.current?.kind === 'rollback' ? '再次发布可恢复成品自动更新。' : undefined}
-      actions={<><Button icon={ClipboardCheck} busy={busy === 'check'} disabled={Boolean(busy)} onClick={runCheck}>运行检查</Button>
+      actions={<><Button icon={ClipboardCheck} busy={busy === 'check'} disabled={Boolean(busy) || hasQualityPools && !quality.ready} onClick={runCheck}>运行检查</Button>
         <Button key={hasDraftChanges ? 'publish' : 'republish'} variant={hasDraftChanges ? 'primary' : 'secondary'} icon={CloudUpload}
-          busy={busy === 'publish'} disabled={Boolean(busy)} onClick={publish}>{hasDraftChanges ? '发布配置' : '重新发布'}</Button></>}>
+          busy={busy === 'publish'} disabled={Boolean(busy) || hasQualityPools && !quality.ready} onClick={publish}>{hasDraftChanges ? '发布配置' : '重新发布'}</Button></>}>
       <ConfigSummary counts={view.counts} />
       <div className="review-status" role="status">
         {busy === 'check' || busy === 'publish' ? (busy === 'check' ? '正在使用 Mihomo 检查配置…' : '正在校验并发布…') : <>
@@ -185,7 +203,7 @@ export function PublishPage() {
               <TableCell className="table-row-title"><strong>{versionLabel(version)}</strong><div className="chips"><Badge tone={version.seq === state.current?.seq ? 'success' : 'neutral'}>
                 {version.seq === state.current?.seq ? '当前版本' : '历史有效'} · {versionKind(version)}</Badge>
                 {version.kind === 'rollback' && <Badge>恢复 v{version.parent}</Badge>}</div></TableCell>
-              <TableCell mobileLabel="发布时间"><TimeLabel value={version.at} /></TableCell>
+              <TableCell mobileLabel="发布时间"><TimeLabel value={version.at} />{version.qualityReportId && <small className="muted" title={version.qualityReportId}>质量报告 {version.qualityReportId.slice(0, 8)}</small>}</TableCell>
               <TableCell className="numeric" mobileLabel="节点 / 组 / 规则">{version.counts.nodes} / {version.counts.groups} / {version.counts.rules}
                 {changes.length > 0 && <small className="muted">{changes.join(' · ')}</small>}</TableCell>
               <TableCell className="table-row-wide">{version.seq !== state.current?.seq && <Button size="small" icon={RotateCcw} onClick={() => setTarget(version)}>回滚</Button>}</TableCell>

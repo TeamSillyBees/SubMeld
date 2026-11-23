@@ -10,7 +10,10 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
 import { commonKeywords, defaultFilter, regionLabel, regions } from '../shared/catalog.ts'
 import { draftDataset, filterNodes, sourceReferences } from '../shared/config.ts'
-import { membersForSources } from '../shared/group-filter.ts'
+import { QualityBaselinePicker } from './quality-baseline.tsx'
+import { NodeQualityValue, qualitySortLabels } from './node-quality.tsx'
+import { compareQuality, type QualitySort } from '../shared/quality-snapshot.ts'
+import { membersForSources, poolCondition, qualityPresets, qualityReason } from '../shared/group-filter.ts'
 import { calendarFormatter, renewalNoticeDays } from '../shared/subscription.ts'
 import { useConfirm, useUnsavedChanges } from './confirm.tsx'
 import { useProject, useSearchValue } from './project.tsx'
@@ -606,7 +609,13 @@ function SourcePolicy({ source, busy, saveFilter }: { source: Source; busy: bool
 }
 
 export function NodesPage() {
-  const { state, view, route, save, call, reload, notify } = useProject()
+  const { state, view, route, save, call, reload, notify, quality } = useProject()
+  const [sort, setSort] = useSearchValue('sort')
+  const [presetId, setPreset] = useSearchValue('quality')
+  const preset = Object.hasOwn(qualityPresets, presetId) ? qualityPresets[presetId] : undefined
+  const sortKey = Object.hasOwn(qualitySortLabels, sort) ? sort as QualitySort : null
+  const readings = quality.snapshot?.rows
+  const awaitingQuality = Boolean(preset || sortKey) && !quality.ready
   const focusNode = view.nodes.find(row => row.sourceId === route.id && row.id === route.detail)
   const [sourceParam, setSource] = useSearchValue('source', route.id ?? 'all')
   const source = sourceParam === 'all' ? '' : sourceParam
@@ -628,9 +637,10 @@ export function NodesPage() {
       setAreas('')
     }
   }, [route.id, route.detail])
-  const nodes = view.nodes.filter(row => (!source || source === row.sourceId) && (!areas.length || areas.includes(row.region))
+  const nodes = view.nodes.filter(row => (!preset || !qualityReason(preset.condition, readings?.[row.key])) && (!source || source === row.sourceId) && (!areas.length || areas.includes(row.region))
     && (searchable(row.name, query) || searchable(row.originalName, query) || searchable(state.notes[row.key]?.note, query))
     && (status === 'all' || status === 'kept' && row.kept || status === 'excluded' && !row.kept || status === 'conflicts' && row.collision || status === 'favorites' && state.notes[row.key]?.favorite))
+  if (sortKey) nodes.sort((a, b) => compareQuality(readings?.[a.key], readings?.[b.key], sortKey))
   const [offset, setOffset] = useListPage(nodes.length)
   useEffect(() => {
     if (!route.detail) return
@@ -682,6 +692,22 @@ export function NodesPage() {
       setSelected([])
     } catch (cause) { const error = asError(cause); notify(error.message, 'danger') } finally { setBusy(false) }
   }
+  async function savePool() {
+    if (busy) return
+    const filteredKeys = status === 'favorites' || status === 'conflicts' ? view.nodes.filter(n =>
+      status === 'favorites' ? state.notes[n.key]?.favorite : n.collision).map(n => n.key) : undefined
+    const noteMatches = query.trim() ? view.nodes.filter(n => searchable(state.notes[n.key]?.note, query)).map(n => n.key) : []
+    const pool = poolCondition({ sourceIds: source ? [source] : [], regions: areas, quality: preset?.condition,
+      search: query.trim(), nodeKeys: filteredKeys, noteMatches: noteMatches.length ? noteMatches : undefined })
+    const base = (activeSource?.name || '节点').slice(0, 230) + ' · ' + (preset?.name || '筛选池')
+    const taken = new Set([...state.draft.groups.map(g => g.name), ...view.nodes.map(n => n.name)])
+    let name = base
+    for (let i = 2; taken.has(name); i++) name = base + ' ' + i
+    setBusy(true)
+    try {
+      await save({ ...state.draft, groups: [...state.draft.groups, { id: newId(), name, type: 'select', enabled: true, members: [pool] }] }, state.revision, '已保存到代理组「' + name + '」')
+    } catch (e) { notify(asError(e).message, 'danger') } finally { setBusy(false) }
+  }
   async function saveNote(value: NoteEditor) {
     try {
       await call('note', { sourceId: value.row.sourceId, nodeId: value.row.id, favorite: value.favorite, note: value.text })
@@ -697,6 +723,14 @@ export function NodesPage() {
       <div className="scope-select"><NativeSelect aria-label="来源筛选" value={sourceParam} onChange={event => changeScope(event.target.value)}>{scopes.map(([value, name]) => <NativeSelectOption key={value} value={value}>{name}</NativeSelectOption>)}</NativeSelect></div>
       <QualityControl selected={selected} filtered={nodes.map(node => node.key)} />
     </>} />
+    <div className="node-quality-bar"><div className="quality-baseline"><strong>质量基准</strong><QualityBaselinePicker /></div>
+      <div className="actions"><NativeSelect aria-label="节点质量筛选" value={preset?.name ? presetId : ''} onChange={e => { setPreset(e.target.value); setOffset(0); setSelected([]) }}>
+        <NativeSelectOption value="">不限质量</NativeSelectOption>{Object.entries(qualityPresets).map(([id, p]) => <NativeSelectOption key={id} value={id}>{p.name}</NativeSelectOption>)}
+      </NativeSelect><NativeSelect aria-label="节点质量排序" value={sortKey ?? ''} onChange={e => { setSort(e.target.value); setOffset(0) }}>
+        <NativeSelectOption value="">默认顺序</NativeSelectOption>{Object.entries(qualitySortLabels).map(([id, name]) => <NativeSelectOption key={id} value={id}>{name}{id === 'speed' || id === 'ai' ? '从高到低' : ['tls','https','loss'].includes(id) ? '从低到高' : '优先'}</NativeSelectOption>)}
+      </NativeSelect><Button size="small" icon={Plus} disabled={busy || awaitingQuality || !nodes.some(n => n.kept)} onClick={savePool}>保存为代理组筛选池</Button></div>
+    </div>
+    {quality.ready && state.current && quality.reportId && quality.reportId !== state.current.qualityReportId && state.draft.groups.some(g => g.enabled && g.members.some(m => m.kind === 'pool' && m.quality)) && <div className="actions field-note">质量基准已更新。<ButtonLink size="small" page="publish">预览代理组差异</ButtonLink></div>}
     {activeSource && <SourcePolicy key={activeSource.id} source={activeSource} busy={busy} saveFilter={saveFilter} />}
     <Panel className="node-detail" title={<>节点明细 <span className="soft-count">共 {formatNumber(raw)}</span> <Badge tone="success">保留 {formatNumber(retained)}</Badge> <Badge>排除 {formatNumber(excluded)}</Badge>
       {unknown > 0 && <> <Badge tone="warning">未知 {formatNumber(unknown)}</Badge></>}{unsupported > 0 && <> <Badge tone="danger">无法导入 {formatNumber(unsupported)}</Badge></>}</>}
@@ -711,11 +745,11 @@ export function NodesPage() {
         <Button size="small" onClick={() => setManual(selected, true)} busy={busy}>批量排除</Button>
         <Button size="small" onClick={() => setManual(selected, false)} disabled={busy}>撤销手动排除</Button>
         <Button variant="ghost" size="small" onClick={() => setSelected([])}>清除选择</Button></div>}
-      {!visible.length ? <Empty icon={Network} title={view.nodes.length ? '没有匹配的节点' : '暂无节点'}
-        actions={view.nodes.length ? <Button onClick={() => { setSource('all'); setStatus('all'); setQuery(''); setAreas(''); setOffset(0) }}>清除筛选</Button>
+      {awaitingQuality ? <p className="panel-padding muted" role="status">{quality.error ? '重新读取质量报告后可显示筛选结果。' : '正在读取质量报告…'}</p> : !visible.length ? <Empty icon={Network} title={view.nodes.length ? '没有匹配的节点' : '暂无节点'}
+        actions={view.nodes.length ? <Button onClick={() => { setSource('all'); setStatus('all'); setQuery(''); setAreas(''); setPreset(''); setOffset(0) }}>清除筛选</Button>
           : <ButtonLink icon={ChevronRight} page="sources">查看订阅源</ButtonLink>} />
         : <><Table className="nodes-table mobile-table" scrollLabel="当前页节点"><TableHeader><TableRow><TableHead><PageCheckbox label="选择当前页节点" checked={visible.every(row => selectedSet.has(row.key))} onCheckedChange={enabled => setSelected(enabled ? [...new Set([...selected, ...visible.map(row => row.key)])] : selected.filter(key => !visible.some(row => row.key === key)))} /></TableHead>
-          <TableHead>状态</TableHead><TableHead>整合后名称与节点属性</TableHead><TableHead>保留或排除原因</TableHead><TableHead>操作</TableHead></TableRow></TableHeader><TableBody>
+          <TableHead>状态</TableHead><TableHead>整合后名称与节点属性</TableHead>{(quality.reportId || sortKey) && <TableHead>{qualitySortLabels[sortKey ?? 'https']}</TableHead>}<TableHead>保留或排除原因</TableHead><TableHead>操作</TableHead></TableRow></TableHeader><TableBody>
           {visible.map(row => {
             const comment = state.notes[row.key]
             const policy = state.draft.sources.find(entry => entry.id === row.sourceId)?.filter
@@ -726,6 +760,7 @@ export function NodesPage() {
               <TableCell className="table-row-title"><strong className="node-final-name" translate="no" title={'原名 ' + row.originalName}>{row.name}</strong>
                 <div className="node-meta"><RouteLink page="sources" id={row.sourceId} detail="filter">{row.sourceName}</RouteLink><span>{regionLabel(row.region)}</span><code>{row.type.toUpperCase()}</code>
                   {comment?.favorite && <Star aria-label="已收藏" />}</div>{comment?.note && <small className="muted">{comment.note}</small>}</TableCell>
+              {(quality.reportId || sortKey) && <TableCell mobileLabel={qualitySortLabels[sortKey ?? 'https']}>{quality.ready ? <NodeQualityValue row={readings?.[row.key]} sort={sortKey ?? 'https'} /> : '读取中…'}</TableCell>}
               <TableCell mobileLabel="筛选依据"><span className="muted">{row.reasons.length ? row.reasons.join(' · ') : policy?.keep.includes(row.region) ? '命中保留地区 · ' + regionLabel(row.region) : '符合当前筛选条件'}</span>
                 {row.collision && <div><Badge tone="danger">名称冲突</Badge></div>}
                 {!!row.duplicateCount && <small className="warning-text">精确重复 {row.duplicateCount} · {row.duplicates?.map(item => item.source).join('、')}</small>}</TableCell>

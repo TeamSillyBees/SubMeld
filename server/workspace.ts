@@ -1,4 +1,5 @@
 import type { Diff, Draft, EntryKind, Library, Metadata, Profile, Projection, Provider, ProviderData, ProviderMap, ProviderRecord, Source, SourceData, SourceMap, SourceNodes, SourceRecord, SourceSummary, SubscriptionInfo, UpdateLog, Version, VersionSummary, WorkspaceState, WorkspaceStatus } from '../shared/model.ts'
+import { qualitySnapshot, type QualitySnapshot } from '../shared/quality-snapshot.ts'
 import { qualitySpaces } from './quality.ts'
 import type { QualityNode } from '../shared/quality.ts'
 import type { Dataset, DocumentRow, StoredRecord } from './records.ts'
@@ -32,7 +33,7 @@ type SourceBrief = Omit<SourceSummary, 'status' | 'next'>
 type ProviderFields = Omit<ProviderRecord, 'status' | 'next'>
 type RecordView = { kind: 'source'; summary: SourceBrief; full?: SourceFields } | { kind: 'provider'; summary: ProviderFields }
 type Snapshot = { metadata: Metadata; status: WorkspaceStatus }
-type Compilation = { yaml: string | null; view: Projection }
+type Compilation = { qualitySnapshot?: QualitySnapshot | null; yaml: string | null; view: Projection }
 type Download = Awaited<ReturnType<typeof download>>
 const sourceData = (data?: Dataset | null) => data && 'nodes' in data ? data : null
 const providerData = (data?: Dataset | null) => data && 'payload' in data ? data : null
@@ -218,9 +219,21 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
     return { nodes, providers }
   }
 
-  async function compile(profile: Profile, recipe: Draft, useDraft: boolean, replacement?: { key: string; data: Dataset }): Promise<Compilation> {
+  function snapshotFor(profile: Profile, requested: unknown): QualitySnapshot | null {
+    const spaces = qualitySpaces(profile.id)
+    const id = requested === undefined ? store.list(spaces.jobs).map(([, job]) => job).filter(job => job.status === 'completed')
+      .sort((a, b) => (b.finishedAt ?? '').localeCompare(a.finishedAt ?? ''))[0]?.id : requested
+    if (id == null) return requested === undefined ? activeVersion(profile)?.qualitySnapshot ?? null : null
+    const reportId = read(z.uuid(), id)
+    const report = store.get(spaces.reports, reportId)
+    if (report) return qualitySnapshot(report)
+    const pinned = activeVersion(profile)?.qualitySnapshot
+    if (pinned?.reportId === reportId) return pinned
+    throw new UserError('这份质量报告已移出历史记录，请重新选择。', 409)
+  }
+  async function compile(profile: Profile, recipe: Draft, useDraft: boolean, quality: QualitySnapshot | null, replacement?: { key: string; data: Dataset }): Promise<Compilation> {
     const { nodes, providers } = dataFor(profile, recipe, useDraft, replacement)
-    const compiled = evaluate(recipe, nodes, providers, true)
+    const compiled = evaluate(recipe, nodes, providers, true, quality)
     const secrets = getAllSecrets([
       ...recipe.sources.map(source => source.url),
       ...Object.values(nodes).flatMap(data => data?.urls ?? []),
@@ -235,14 +248,14 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
     if (coreIssue) compiled.issues.push(coreIssue)
     const { config, ...projection } = compiled
     const view = redact({ ...projection, nodes: projection.nodes.filter(node => node.kept) }, secrets)
-    return { yaml: coreIssue ? null : yaml, view }
+    return { yaml: coreIssue ? null : yaml, view, qualitySnapshot: quality }
   }
 
   function insertVersion(profile: Profile, recipe: Draft, compiled: Compilation, kind: Version['kind'], parent: number | null = null) {
     const version = {
       seq: (store.history(versionSpace(profile), 1, 0)[0]?.seq ?? 0) + 1,
       at: timestamp(), kind, parent, counts: compiled.view.counts, yaml: compiled.yaml!,
-      recipe, view: compiled.view,
+      recipe, view: compiled.view, qualitySnapshot: compiled.qualitySnapshot ?? null, qualityReportId: compiled.qualitySnapshot?.reportId ?? null,
     }
     store.set(versionSpace(profile), versionKey(version.seq), version)
     profile.active = version.seq
@@ -252,7 +265,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
 
   function summarize(version: Version | null): VersionSummary | null {
     if (!version) return null
-    const { yaml, recipe, view, ...summary } = version
+    const { yaml, recipe, view, qualitySnapshot, ...summary } = version
     return summary
   }
 
@@ -513,16 +526,16 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
     })
   }
 
-  function check(profileId: ProfileId) {
+  function check(profileId: ProfileId, reportId?: unknown) {
     const profile = profileFor(profileId)
-    return compile(profile, profile.draft, true).then(result => ({ revision: profile.revision, ...result.view }))
+    return compile(profile, profile.draft, true, snapshotFor(profile, reportId)).then(result => ({ revision: profile.revision, ...result.view }))
   }
 
-  function publish(profileId: ProfileId, revision: unknown) {
+  function publish(profileId: ProfileId, revision: unknown, reportId?: unknown) {
     return mutate(async () => {
       const profile = profileFor(profileId)
       checkRevision(profile, revision)
-      const result = await compile(profile, profile.draft, true)
+      const result = await compile(profile, profile.draft, true, snapshotFor(profile, reportId))
       if (!result.yaml) throw new UserError('检查未通过，当前订阅继续使用上一份成品。', 422, result.view)
       store.transaction(() => {
         for (const job of jobsFor(profile.draft).filter(job => job.enabled)) {
@@ -583,7 +596,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
         }
       }
       if (data && !message && current.recipe && active && active.kind !== 'rollback') {
-        result = await compile(profile, active.recipe, false, { key: job.key, data })
+        result = await compile(profile, active.recipe, false, active.qualitySnapshot ?? null, { key: job.key, data })
         if (!result.yaml) {
           message = '更新未通过配置检查。' + (result.view.issues.find(issue => issue.severity === 'error')?.message ?? '')
         }
@@ -690,7 +703,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
         })
       })
     },
-    probe, saveDraft, check, publish, rollback, tick, profileFor, activeVersion,
+    probe, saveDraft, snapshotFor, check, publish, rollback, tick, profileFor, activeVersion,
     claimRenewalReminders(profileId: ProfileId, body: Body) {
       const timeZone = read(z.string().min(1).max(100), body.timeZone)
       const requested = new Set(read(z.array(z.string().max(75)).max(200), body.dates))
@@ -749,7 +762,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
       const draft = body.draft ? resolveDraft(profile, body.draft) : profile.draft
       const input = String(body.domain ?? '').slice(0, 2048)
       const { nodes, providers } = dataFor(profile, draft, true, null, owner)
-      const projection = evaluate(draft, nodes, providers)
+      const projection = evaluate(draft, nodes, providers, false, snapshotFor(profile, body.qualityReportId))
       return redact({
         ...(body.draft && !input.trim() ? { checkedOnly: true } : await matchDomain(projection, input, providers, draft.base.mode)),
         issues: projection.issues.filter(issue => issue.pane === 'rules' && (!body.serviceId || issue.id === body.serviceId)).slice(0, 10),

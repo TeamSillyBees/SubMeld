@@ -1,4 +1,5 @@
 import { type AgentReport, type AiResults, type Assignment, type Progress, type QualityRow } from '../shared/quality.ts'
+import { aiSkipReason, isSubscriptionNotice } from '../shared/quality-options.ts'
 import { withCore } from './core.ts'
 import { inspectPlatforms } from './ai.ts'
 import { measureLatency, measureSpeed, summarize, targets } from './measure.ts'
@@ -15,11 +16,13 @@ export async function run(job: Assignment, binary: string, signal: AbortSignal, 
   endpoints = targets, inspect = inspectPlatforms): Promise<AgentReport> {
   const { config } = job
   const startedAt = new Date().toISOString()
-  return withCore(binary, job.nodes, signal, async (routes, invalid, active) => {
-    const rows = new Map<string, QualityRow>(invalid.map(node => [node.key, {
-      key: node.key, samples: [], ...summarize([]), error: 'invalid_node', exit: null, speed: null, ai: null,
-    }]))
-    let done = invalid.length
+  const notices = new Set(job.nodes.filter(node => isSubscriptionNotice(node.name) || isSubscriptionNotice(String(node.connection.name ?? ''))).map(node => node.key))
+  return withCore(binary, job.nodes.filter(node => !notices.has(node.key)), signal, async (routes, invalid, active) => {
+    const rows = new Map<string, QualityRow>()
+    for (const key of [...notices, ...invalid.map(node => node.key)]) rows.set(key, {
+      key, samples: [], ...summarize([]), error: notices.has(key) ? 'info_node' : 'invalid_node', exit: null, speed: null, ai: null,
+    })
+    let done = rows.size
     progress({ stage: 'latency', done, total: job.nodes.length })
     await pool(routes, config.concurrency, active, async ({ node, outlet }) => {
       rows.set(node.key, await measureLatency(node.key, outlet, config, active, endpoints))
@@ -36,18 +39,28 @@ export async function run(job: Assignment, binary: string, signal: AbortSignal, 
     }
     if (config.ai) {
       const exits = new Map<string, typeof alive>()
+      const weakByExit = new Map<string, typeof alive>()
       for (const route of alive) {
-        const id = rows.get(route.node.key)!.exit?.ip ?? route.node.key
-        const members = exits.get(id) ?? []
+        const row = rows.get(route.node.key)!
+        const reason = aiSkipReason(row)
+        if (reason) row.aiSkipped = reason
+        if (!row.exit) continue
+        const groups = reason ? weakByExit : exits
+        const members = groups.get(row.exit.ip) ?? []
         members.push(route)
-        exits.set(id, members)
+        groups.set(row.exit.ip, members)
       }
       done = 0
       progress({ stage: 'ai', done, total: exits.size })
       await pool([...exits.values()], 2, active, async members => {
-        const first = members[0]
+        const first = members.reduce((best, route) => (rows.get(route.node.key)!.httpsMedianMs ?? Infinity) < (rows.get(best.node.key)!.httpsMedianMs ?? Infinity) ? route : best)
         const ai: AiResults = await inspect(first.outlet, rows.get(first.node.key)!.exit?.region ?? null, active)
-        for (const { node } of members) rows.get(node.key)!.ai = ai
+        const cached = weakByExit.get(rows.get(first.node.key)!.exit!.ip) ?? []
+        for (const { node } of [...members, ...cached]) {
+          const row = rows.get(node.key)!
+          row.ai = ai
+          delete row.aiSkipped
+        }
         progress({ stage: 'ai', done: ++done, total: exits.size })
       })
     }

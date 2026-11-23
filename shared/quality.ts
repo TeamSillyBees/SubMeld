@@ -9,8 +9,8 @@ export const qualityConfig = z.strictObject({
   speedConcurrency: integer(1, 2), seconds: integer(2, 15), mebibytes: integer(1, 32), ai: z.boolean(),
 })
 export type QualityConfig = z.infer<typeof qualityConfig>
-export const aiStates = ['reachable', 'authentication', 'region_restricted', 'region_mismatch', 'challenge', 'ip_blocked', 'rate_limited', 'unknown', 'network_error'] as const
-export const evidenceTypes = ['web_entry', 'login_redirect', 'credentials_required', 'region_denied', 'region_disagrees', 'region_unconfirmed', 'cf_challenge', 'ip_denied', 'rate_limit', 'unrecognized', 'network'] as const
+export const aiStates = ['reachable', 'unavailable', 'authentication', 'region_restricted', 'region_mismatch', 'challenge', 'ip_blocked', 'rate_limited', 'unknown', 'network_error'] as const
+export const evidenceTypes = ['web_entry', 'compliance_json', 'app_gateway', 'http_denied', 'login_redirect', 'credentials_required', 'region_denied', 'region_disagrees', 'region_unconfirmed', 'cf_challenge', 'ip_denied', 'rate_limit', 'unrecognized', 'network'] as const
 const country = z.string().regex(/^[A-Z]{2}$/)
 const aiReading = z.strictObject({
   state: z.enum(aiStates), evidence: z.enum(evidenceTypes), httpStatus: integer(100, 599).nullable(),
@@ -35,10 +35,11 @@ export const assignmentSchema = z.object({
 })
 export type Assignment = z.infer<typeof assignmentSchema>
 export const resultRow = z.strictObject({
-  key: qualityKey, available: z.boolean(), error: z.enum(['invalid_node', 'no_response']).nullable(),
+  key: qualityKey, available: z.boolean(), error: z.enum(['invalid_node', 'no_response', 'info_node']).nullable(),
   samples: z.array(latencySample).max(8), tlsMedianMs: ms.nullable(), httpsMedianMs: ms.nullable(),
   jitterMs: ms.nullable(), lossRate: z.number().min(0).max(1).nullable(),
   exit: z.strictObject({ ip: z.union([z.ipv4(), z.ipv6()]), region: country.nullable() }).nullable(),
+  aiSkipped: z.enum(['missing_exit', 'weak_connection']).optional(),
   speed: speedReading.nullable(), ai: z.record(z.enum(surfaces), aiReading).nullable(),
 })
 export type QualityRow = z.infer<typeof resultRow>
@@ -53,12 +54,13 @@ export type JobStatus = 'waiting' | 'running' | 'completed' | 'cancelled' | 'exp
 export interface QualityJob {
   id: string; createdAt: string; finishedAt: string | null; expiresAt: string; status: JobStatus
   config: QualityConfig; total: number; progress: Progress; available: number | null
+  targetDeviceId?: string | null; targetDeviceName?: string | null
   failure: 'probe_error' | 'disconnected' | null
 }
 export interface QualityReport extends Omit<AgentReport, 'results'> {
-  createdAt: string; config: QualityConfig
+  createdAt: string; config: QualityConfig; targetDeviceId?: string | null; targetDeviceName?: string | null
   results: (QualityRow & { name: string; sourceName: string })[]
 }
-export interface ProbeDevice { name: string; platform: 'windows' | 'linux'; lastSeen: string; online: boolean }
+export interface ProbeDevice { id: string; name: string; remark: string; platform: 'windows' | 'linux'; lastSeenAt: string; status: 'online' | 'busy' | 'offline' }
 export interface DevicePairing { pairing: string; expiresAt: string }
 export interface Pairing { job: QualityJob; pairing: string }

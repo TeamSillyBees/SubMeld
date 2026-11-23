@@ -5,6 +5,7 @@ import { api, type Call, type Endpoint, type LocalInput, type Payload, type Resp
 import type { ChangeProfile, Destination, Feedback, NavigationGuard, ProfileAction, Route, View } from './project.tsx'
 import { asError } from './errors.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useQualityBaseline } from './quality-baseline.tsx'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 import logo from '../docs/assets/submeld-logo.svg'
@@ -414,7 +415,8 @@ function App() {
     Object.values(state.sources).map(record => record.nodesVersion),
     Object.values(state.providers).map(record => record.good),
   ])
-  const view = useMemo(() => state ? projection(state.draft, state) : null, [state?.draft, datasetVersions])
+  const quality = useQualityBaseline(state?.id, call, state?.current?.qualityReportId)
+  const view = useMemo(() => state ? projection(state.draft, state, quality.snapshot) : null, [state?.draft, datasetVersions, quality.snapshot])
   if (!session) return <Loading error={sessionError} retry={loadSession}>正在连接服务端…</Loading>
   if (!session.authenticated) return <SignIn session={session} onDone={next => { setSessionError(''); setSession(next) }} />
   if (!state || !view) return <Loading error={sessionError} retry={() => {
@@ -423,7 +425,7 @@ function App() {
   }}>正在读取配置…</Loading>
   const [, , , Page] = pages.find(([page]) => page === route.page) ?? pages[0]
   const jump = ({ pane, id, relatedId }: Pick<Issue, 'pane' | 'id' | 'relatedId'>) => navigate(pane, id, relatedId)
-  const context = { state, view, route, running, call, pathFor, hrefFor, replaceSearch, save, reload, applyState, notify, navigate, jump, setNavigationGuard }
+  const context = { state, view, quality, route, running, call, pathFor, hrefFor, replaceSearch, save, reload, applyState, notify, navigate, jump, setNavigationGuard }
 
   return <ProjectContext.Provider value={context}>
     <SidebarProvider className="workspace-layout" style={{ '--sidebar-width': 'clamp(14rem, 13.4vw, 20rem)' }}>

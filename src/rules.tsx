@@ -309,7 +309,7 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }: { i
 }
 
 function MatchForm({ buildDraft, serviceId, disabled, changedKey, onOpen, examples = [] }: { buildDraft?: () => Draft; serviceId?: string; disabled?: boolean; changedKey?: string | number; onOpen?: (rule: EvaluatedRule) => void; examples?: string[] }) {
-  const { call, view, state } = useProject()
+  const { call, view, state, quality } = useProject()
   const [domain, setDomain] = useState(examples[0] ?? '')
   const [result, setResult] = useState<MatchResponse | null>(null)
   const [busy, setBusy] = useState(false)
@@ -336,7 +336,7 @@ function MatchForm({ buildDraft, serviceId, disabled, changedKey, onOpen, exampl
     setBusy(true)
     setResult(null)
     try {
-      const answer = await call('match', { domain: value, draft: buildDraft?.(), serviceId })
+      const answer = await call('match', { domain: value, draft: buildDraft?.(), serviceId, qualityReportId: quality.reportId })
       if (latest.current === request) setResult(answer)
     } catch (cause) {
       const error = asError(cause)

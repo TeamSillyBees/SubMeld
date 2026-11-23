@@ -43,11 +43,7 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     await page.setViewportSize({ width: 390, height: 844 })
     await capture('setup-mobile')
     await expect(dialog.getByRole('button', { name: '创建检测任务' })).toBeInViewport()
-    const created = page.waitForResponse(r => r.url().includes('/api/quality/queue'))
-    await dialog.getByRole('button', { name: '创建检测任务' }).click()
-    const queued = await (await created).json() as QualityJob
-    await expect(dialog.getByRole('heading', { name: '等待探针自动领取' })).toBeVisible()
-    await capture('pair-mobile')
+    await expect(dialog.getByRole('button', { name: '创建检测任务' })).toBeDisabled()
     const href = await dialog.getByRole('link', { name: '下载 npm 安装包' }).getAttribute('href')
     const archive = await page.request.get(base + href)
     expect(archive.ok()).toBe(true)
@@ -57,13 +53,37 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     const invite = await (await pairing).json() as DevicePairing
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(invite.pairing)
     const [, profileId, ticket] = new URL(invite.pairing).hash.slice(1).split('.')
-    const jobId = queued.id
+    let jobId = ''
     const secret = randomBytes(32).toString('base64url')
     const worker = randomBytes(32).toString('base64url')
     const post = (action: string, bearer: string, body: object) => page.request.post(base + '/api/quality/agent/' + action, {
       headers: { Authorization: 'Bearer ' + bearer }, data: { profileId, jobId, ...body },
     })
     expect((await post('enroll', ticket, { secret, name: 'Desk PC', platform: 'windows' })).ok()).toBe(true)
+    const device = (await (await page.request.get(base + '/api/quality/devices')).json())[0]
+    await expect(dialog.getByLabel('执行探针').locator('option', { hasText: 'Desk PC' })).toHaveCount(1, { timeout: 15000 })
+    const secondInvite = await (await page.request.post(base + '/api/quality/invite', { data: {} })).json() as DevicePairing
+    const secondSecret = randomBytes(32).toString('base64url')
+    expect((await post('enroll', secondInvite.pairing.split('.').at(-1)!, { name: 'Lab PC', platform: 'linux', secret: secondSecret })).ok()).toBe(true)
+    const second = (await (await page.request.get(base + '/api/quality/devices')).json()).find((d: { name: string }) => d.name === 'Lab PC')
+    await dialog.getByLabel('执行探针').selectOption(device.id)
+    await dialog.locator('.workspace-dialog-body').evaluate(el => { el.scrollTop = 0 })
+    await capture('target-mobile')
+    const created = page.waitForResponse(r => r.url().includes('/api/quality/queue'))
+    await dialog.getByRole('button', { name: '创建检测任务' }).click()
+    const queued = await (await created).json() as QualityJob
+    jobId = queued.id
+    expect(queued.targetDeviceId).toBe(device.id)
+    await expect(dialog.getByRole('heading', { name: /等待 Desk PC 执行/ })).toBeVisible()
+    await capture('pair-mobile')
+    await dialog.getByLabel('改派在线探针').selectOption(second.id)
+    await dialog.getByRole('button', { name: '改派任务' }).click()
+    await expect(dialog.getByRole('heading', { name: /等待 Lab PC 执行/ })).toBeVisible()
+    expect(await (await post('poll', secret, { worker })).json()).toBeNull()
+    await dialog.getByLabel('改派在线探针').selectOption(device.id)
+    await dialog.getByRole('button', { name: '改派任务' }).click()
+    await expect(dialog.getByRole('heading', { name: /等待 Desk PC 执行/ })).toBeVisible()
+    expect((await post('leave', secondSecret, {})).ok()).toBe(true)
     const job = await (await post('poll', secret, { worker })).json() as Assignment
     expect(job.nodes).toHaveLength(205)
     expect(await (await post('progress', worker, { progress: { stage: 'latency', done: 121, total: 205 } })).json()).toEqual({ ok: true })
@@ -73,13 +93,19 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     await expect(dialog.getByRole('progressbar')).toHaveAttribute('value', '121')
     const ai = Object.fromEntries(surfaces.map(s => [s, classify(s, null)])) as NonNullable<QualityRow['ai']>
     ai.grok = classify('grok', { status: 403, body: '', location: '', challenge: true })
-    const results: QualityRow[] = job.nodes.map(({ key }, i) => ({ key, available: true, error: null,
-      samples: Array.from({ length: job.config.rounds }, () => ({ tlsMs: 25, httpsMs: 60 + i })),
-      tlsMedianMs: 25, httpsMedianMs: 60 + i, jitterMs: 0, lossRate: 0, exit: { ip: '192.0.2.10', region: 'JP' }, ai,
-      speed: { bytes: 1048576, elapsedMs: 1000, averageBps: 1048576, peakBps: 1048576, perSecondBps: [1048576], stop: 'end' },
-    }))
+    const results: QualityRow[] = job.nodes.map(({ key }, i) => {
+      const slow = i === job.nodes.length - 1
+      const httpsMs = slow ? 4500 : 60 + i
+      return { key, available: true, error: null,
+        samples: Array.from({ length: job.config.rounds }, () => ({ tlsMs: 25, httpsMs })),
+        tlsMedianMs: 25, httpsMedianMs: httpsMs, jitterMs: 0, lossRate: 0,
+        exit: { ip: slow ? '192.0.2.11' : '192.0.2.10', region: 'JP' }, ai: slow ? null : ai, aiSkipped: slow ? 'weak_connection' : undefined,
+        speed: { bytes: 1048576, elapsedMs: 1000, averageBps: 1048576, peakBps: 1048576, perSecondBps: [1048576], stop: 'end' },
+      }
+    })
     expect((await post('complete', worker, { report: { schemaVersion: 1, jobId, startedAt: job.createdAt, finishedAt: new Date().toISOString(), results } })).ok()).toBe(true)
     await expect(dialog.getByRole('heading', { name: '检测结果' })).toBeVisible()
+    await expect(dialog.getByText(/AI 已测 1 \/ 2 个/)).toContainText('需复核 1 个（占全部出口 50.0%，占已测出口 100.0%）')
     await dialog.getByLabel('对比 AI 平台').selectOption('grok')
     await capture('results-mobile')
     await page.setViewportSize({ width: 1440, height: 940 })
@@ -114,6 +140,7 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     await dialog.getByRole('switch', { name: 'AI 平台检测' }).click()
     // This dialog was reopened while the first job ran. New jobs default to no bandwidth test.
     await expect(dialog.getByRole('switch', { name: '下载测速' })).not.toBeChecked()
+    await dialog.getByLabel('执行探针').selectOption(device.id)
     await page.route('**/api/quality/queue*', route => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ message: '测试范围已更新。' }) }), { times: 1 })
     await dialog.getByRole('button', { name: '创建检测任务' }).click()
     await expect(dialog.getByText('测试范围已更新。')).toBeVisible()
@@ -130,13 +157,58 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     await expect(dialog.getByLabel('对比 AI 平台')).toHaveCount(0)
     await capture('latency-only-desktop')
     await dialog.getByRole('button', { name: '新建检测' }).click()
+    await expect(dialog.getByRole('button', { name: '创建检测任务' })).toBeDisabled()
+    await dialog.getByLabel('执行探针').selectOption(device.id)
     await dialog.getByRole('button', { name: '创建检测任务' }).click()
     await dialog.getByRole('button', { name: '取消任务' }).click()
     await expect(dialog.getByText('已取消', { exact: true })).toBeVisible()
-    await dialog.getByRole('button', { name: /常驻探针 · Desk PC · 在线/ }).click()
+    await dialog.getByRole('button', { name: /管理探针与配对/ }).click()
     await dialog.getByRole('button', { name: '解除配对', exact: true }).click()
     await dialog.getByRole('button', { name: '确认解除配对' }).click()
     await expect(dialog.getByRole('button', { name: '安装并配对常驻探针' })).toBeVisible()
     expect((await post('poll', secret, { worker })).status()).toBe(403)
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+    await page.getByLabel('基准质量报告').selectOption(queued.id)
+    await page.getByLabel('节点质量排序').selectOption('loss')
+    await page.getByLabel('节点质量筛选').selectOption('lowLatency')
+    await expect(page.getByRole('checkbox', { name: '选择节点 东京 001' })).toBeVisible()
+    await capture('nodes-desktop')
+    await page.setViewportSize({ width: 390, height: 844 })
+    await capture('nodes-mobile')
+    await page.getByRole('button', { name: '保存为代理组筛选池' }).click()
+    await expect.poll(() => app.workspace.state().draft.groups.some(g => g.name.includes('低延迟'))).toBe(true)
+    const group = app.workspace.state().draft.groups.find(g => g.name.includes('低延迟'))!
+    await page.goto(base + '/#/groups/' + group.id)
+    await page.getByRole('button', { name: '流畅视频', exact: true }).click()
+    await expect(page.getByText('带宽不足 205')).toBeVisible()
+    await page.getByRole('button', { name: '自定义阈值与兜底' }).click()
+    await page.getByRole('switch', { name: '筛空时恢复基础候选' }).click()
+    await expect(page.getByText(/兜底恢复 205 个节点/)).toBeVisible()
+    let finishRead!: () => void
+    const holdRead = new Promise<void>(resolve => { finishRead = resolve })
+    await page.route('**/api/quality/snapshot?id=' + next.id + '*', async route => {
+      await holdRead
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ message: '质量报告读取失败。' }) })
+    }, { times: 1 })
+    await page.getByLabel('基准质量报告').selectOption(next.id)
+    try {
+      await expect(page.locator('.group-filter').getByText('正在读取质量报告…')).toBeVisible()
+      await expect(page.getByRole('button', { name: /补测 .* 个节点/ })).toHaveCount(0)
+    } finally { finishRead() }
+    await expect(page.getByText('质量报告读取失败。')).toBeVisible()
+    await expect(page.getByRole('button', { name: /补测 .* 个节点/ })).toHaveCount(0)
+    await page.getByRole('button', { name: '重新读取报告' }).click()
+    const supplement = page.getByRole('button', { name: /补测 .* 个节点/ })
+    await expect(supplement).toBeVisible()
+    await page.getByRole('button', { name: '自定义阈值与兜底' }).click()
+    await page.locator('.pool-quality').evaluate(el => window.scrollBy(0, el.getBoundingClientRect().top - 70))
+    await capture('pool-mobile')
+    await page.setViewportSize({ width: 1440, height: 940 })
+    await page.locator('.pool-quality').evaluate(el => window.scrollBy(0, el.getBoundingClientRect().top - 80))
+    await capture('pool-desktop')
+    await supplement.click()
+    await expect(dialog.getByRole('switch', { name: '下载测速' })).toBeChecked()
+    await expect(dialog.getByLabel('执行探针')).toHaveValue('')
+
   } finally { await app.close(); await rm(dir, { recursive: true, force: true }) }
 })

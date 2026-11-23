@@ -15,12 +15,13 @@ export function byteSize(bytes: number) {
 }
 const speed = (rate: number) => byteSize(rate) + '/s'
 const stateLabels: Record<AiReading['state'], string> = {
-  reachable: '入口可达', authentication: '需要登录', region_restricted: '地区受限', region_mismatch: '地区不一致',
+  reachable: '入口可达', unavailable: '不可用', authentication: '需要登录', region_restricted: '地区受限', region_mismatch: '地区不一致',
   challenge: 'Cloudflare 挑战', ip_blocked: 'IP 被封禁', rate_limited: '请求受限', unknown: '待确认', network_error: '连接失败',
 }
 const evidenceLabels: Record<AiReading['evidence'], string> = {
+  compliance_json: '合规接口返回有效 JSON', app_gateway: '应用入口未返回限制提示', http_denied: '入口拒绝请求或返回故障提示',
   web_entry: '识别到产品入口页', login_redirect: '入口转向登录页', credentials_required: '接口返回认证要求',
-  region_denied: '服务明确拒绝此地区', region_disagrees: 'Google 识别地区与出口地区不同',
+  region_denied: '平台响应或地区政策表明该地区受限', region_disagrees: 'Google 识别地区与出口地区不同',
   region_unconfirmed: '无法确认个人账号适用地区', cf_challenge: '响应要求浏览器验证', ip_denied: '服务明确封禁出口 IP',
   rate_limit: '服务要求降低请求频率', unrecognized: '响应缺少明确判据', network: '请求失败或超时',
 }
@@ -39,7 +40,8 @@ function NodeDetail({ row, back }: { row: Row; back: () => void }) {
   return <div className="quality-detail">
     <Button size="small" variant="ghost" icon={ArrowLeft} onClick={back}>返回检测结果</Button>
     <div><h3 className="quality-title" translate="no" ref={heading} tabIndex={-1}>{row.name}</h3><p className="muted">{row.sourceName} · {row.exit ? row.exit.ip + ' / ' + (row.exit.region ?? '地区未知') : '未采集到出口'}</p></div>
-    {row.error && <p>{row.error === 'invalid_node' ? '独立核心无法加载此节点配置。' : '本次 HTTPS 采样均未成功。'}</p>}
+    {row.error && <p>{row.error === 'info_node' ? '已跳过订阅流量或到期提示条目。' : row.error === 'invalid_node' ? '独立核心无法加载此节点配置。' : '本次 HTTPS 采样均未成功。'}</p>}
+    {row.aiSkipped && <p className="muted">{row.aiSkipped === 'missing_exit' ? '未获取出口 IP，已跳过 AI 检测。' : '连接丢包过高或延迟过长，已跳过 AI 检测。'}</p>}
     <Metrics values={[[ 'TLS 握手中位数', ms(row.tlsMedianMs)], ['HTTPS 延迟中位数', ms(row.httpsMedianMs)], ['HTTPS 抖动', ms(row.jitterMs)], ['请求丢包率', loss(row.lossRate)]]} />
     {!!row.samples.length && <div><h4>各轮采样</h4><ol className="quality-samples">{row.samples.map((s, i) => <li key={i}>第 {i + 1} 轮 <span>TLS {ms(s.tlsMs)} · HTTPS {s.httpsMs === null ? '失败' : ms(s.httpsMs)}</span></li>)}</ol></div>}
     {row.speed && <section><h4>流式下载</h4>
@@ -50,7 +52,7 @@ function NodeDetail({ row, back }: { row: Row; back: () => void }) {
     {row.ai && <section><h4>AI 平台</h4><div className="quality-ai">{surfaces.map(surface => {
       const a = row.ai![surface]
       return <div key={surface}><strong>{surfaceNames[surface]}</strong><span><Badge tone={a.state === 'reachable' ? 'success' : a.needsReview ? 'warning' : 'danger'}>{stateLabels[a.state]}</Badge>
-        <small>{evidenceLabels[a.evidence]}{a.httpStatus && ' · HTTP ' + a.httpStatus}{a.providerRegion && ' · Google ' + a.providerRegion}{a.needsReview && ' · 需复核'}</small></span></div>
+        <small>{evidenceLabels[a.evidence]}{a.httpStatus && ' · HTTP ' + a.httpStatus}{a.providerRegion && ' · 平台地区 ' + a.providerRegion}{a.needsReview && ' · 需复核'}</small></span></div>
     })}</div></section>}
   </div>
 }
@@ -76,6 +78,9 @@ export function ReportView({ report }: { report: QualityReport }) {
   }
   const available = report.results.filter(r => r.available).length
   const reviews = report.results.filter(hasReview).length
+  const exits = new Set(report.results.flatMap(r => r.exit ? [r.exit.ip] : []))
+  const testedExits = new Set(report.results.flatMap(r => r.exit && r.ai ? [r.exit.ip] : []))
+  const reviewExits = new Set(report.results.flatMap(r => r.exit && hasReview(r) ? [r.exit.ip] : []))
   const rows = report.results.filter(row => (filter === 'all' || (filter === 'review' ? hasReview(row) : row.available === (filter === 'up')))
     && [row.name, row.sourceName, row.exit?.ip, row.exit?.region].some(v => v?.toLowerCase().includes(query.trim().toLowerCase())))
     .sort((a, b) => sort === 'speed' ? (b.speed?.averageBps ?? -1) - (a.speed?.averageBps ?? -1) : (a.httpsMedianMs ?? Infinity) - (b.httpsMedianMs ?? Infinity))
@@ -84,6 +89,10 @@ export function ReportView({ report }: { report: QualityReport }) {
   return <div ref={resultList} className="quality-results">
     <div className="quality-heading"><div><h3 className="quality-title">检测结果</h3><p className="muted">可用 {available} / {report.results.length}{report.config.ai ? ' · ' + reviews + ' 个节点的 AI 结果需复核' : ' · AI 未检测'}{!report.config.bandwidth && ' · 下载未检测'}</p></div>
       <Button icon={Download} size="small" onClick={() => downloadJson('SubMeld-质量检测-' + report.jobId + '.json', report)}>导出 JSON</Button></div>
+    {report.config.ai && <p className="field-note muted">按出口 IP 去重 · AI 已测 {testedExits.size} / {exits.size} 个
+      {testedExits.size > 0 && <> · 需复核 {reviewExits.size} 个（占全部出口 {(100 * reviewExits.size / exits.size).toFixed(1)}%
+        {testedExits.size < exits.size && '，占已测出口 ' + (100 * reviewExits.size / testedExits.size).toFixed(1) + '%'}）</>}
+    </p>}
     <div className="filters"><SearchBox value={query} placeholder="搜索节点、出口 IP 或地区" onChange={value => { setQuery(value); setOffset(0) }} />
       <NativeSelect aria-label="检测结果筛选" value={filter} onChange={e => { setFilter(e.target.value); setOffset(0) }}>
         {Object.entries({ all: '全部结果', up: '可用节点', down: '不可用节点', ...(report.config.ai ? { review: 'AI 待复核' } : {}) }).map(([k, v]) => <NativeSelectOption key={k} value={k}>{v}</NativeSelectOption>)}</NativeSelect>
@@ -92,7 +101,7 @@ export function ReportView({ report }: { report: QualityReport }) {
     </div>
     {rows.length ? <><Table className="mobile-table quality-table" scrollLabel="节点检测结果"><TableHeader><TableRow><TableHead>节点 / 出口</TableHead><TableHead>可用性</TableHead><TableHead>HTTPS 延迟</TableHead>{report.config.bandwidth && <TableHead>平均下载</TableHead>}{report.config.ai && <TableHead>{surfaceNames[platform]}</TableHead>}<TableHead>详情</TableHead></TableRow></TableHeader>
       <TableBody>{rows.slice(offset, offset + 20).map(row => <TableRow key={row.key}><TableCell className="table-row-title"><strong translate="no">{row.name}</strong><small>{row.exit ? (row.exit.region ?? '未知') + ' · ' + row.exit.ip : row.sourceName}</small></TableCell>
-        <TableCell mobileLabel="可用性"><Badge tone={row.available ? 'success' : 'danger'}>{row.available ? '可用' : '不可用'}</Badge></TableCell><TableCell mobileLabel="HTTPS 延迟">{ms(row.httpsMedianMs)}</TableCell>
+        <TableCell mobileLabel="可用性"><Badge tone={row.error === 'info_node' ? 'neutral' : row.available ? 'success' : 'danger'}>{row.error === 'info_node' ? '提示条目' : row.available ? '可用' : '不可用'}</Badge></TableCell><TableCell mobileLabel="HTTPS 延迟">{ms(row.httpsMedianMs)}</TableCell>
         {report.config.bandwidth && <TableCell mobileLabel="平均下载">{row.speed ? row.speed.stop === 'error' && !row.speed.bytes ? '下载失败' : speed(row.speed.averageBps) : '未检测'}</TableCell>}
         {report.config.ai && <TableCell mobileLabel={surfaceNames[platform]}>{row.ai ? <Badge tone={row.ai[platform].state === 'reachable' ? 'success' : row.ai[platform].needsReview ? 'warning' : 'danger'}>{stateLabels[row.ai[platform].state]}</Badge> : '未检测'}</TableCell>}
         <TableCell><Button variant="ghost" size="small" aria-label={'查看检测详情 ' + row.name} data-result-key={row.key} onClick={() => inspect(row)}>详情<ChevronRight /></Button></TableCell>

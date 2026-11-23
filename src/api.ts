@@ -3,6 +3,7 @@ import type {
   ProviderData, Source, SourceData, SourceNodes, UpdateLog, VersionSummary, WorkspaceState, WorkspaceStatus,
 } from '../shared/model.ts'
 
+import type { QualitySnapshot } from '../shared/quality-snapshot.ts'
 import type { DevicePairing, ProbeDevice, QualityConfig, QualityJob, QualityReport } from '../shared/quality.ts'
 
 export interface Session { authenticated: boolean; configured: boolean; setup?: boolean }
@@ -19,17 +20,19 @@ interface SourceExport {
 }
 
 interface Requests {
-  'quality/queue': { keys: string[]; config: QualityConfig }
+  'quality/queue': { targetDeviceId: string; keys: string[]; config: QualityConfig }
   'quality/invite': Record<string, never>
-  'quality/revoke': Record<string, never>
+  'quality/revoke': { id: string }
+  'quality/rename': { id: string; remark: string }
+  'quality/reassign': { id: string; targetDeviceId: string }
   'quality/cancel': { id: string }
   probe: { kind: 'source'; id: string; url?: string; input?: LocalInput } | ({ kind: 'provider'; id: string } & Provider)
   draft: { revision: number; draft: Draft; localInputs?: Record<string, LocalInput>; localNodes?: Record<string, Connection[]> }
-  check: Record<string, never>
-  match: { domain: string; draft?: Draft; serviceId?: string }
+  check: { qualityReportId?: string | null }
+  match: { domain: string; qualityReportId?: string | null; draft?: Draft; serviceId?: string }
   candidate: { id: string; accept: boolean }
   refresh: { id?: string; kind?: EntryKind }
-  publish: { revision: number }
+  publish: { revision: number; qualityReportId?: string | null }
   rollback: { seq: number }
   link: { action: 'rotate' | 'revoke' } | undefined
   profiles: { action: 'create' | 'clone' | 'rename' | 'delete'; title?: string }
@@ -45,11 +48,14 @@ interface Requests {
 
 interface Responses {
   'quality/jobs': QualityJob[]
-  'quality/device': ProbeDevice | null
+  'quality/devices': ProbeDevice[]
+  'quality/rename': { ok: boolean }
+  'quality/reassign': QualityJob
   'quality/invite': DevicePairing
   'quality/revoke': { ok: boolean }
   'quality/queue': QualityJob
   'quality/cancel': QualityJob
+  [path: `quality/snapshot?id=${string}`]: QualitySnapshot
   [path: `quality/report?id=${string}`]: QualityReport
   state: WorkspaceState
   'state?nodes=0': Metadata & WorkspaceStatus

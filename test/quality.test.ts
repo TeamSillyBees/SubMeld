@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -28,13 +28,19 @@ test('quality jobs bind a single worker to an immutable selection, expire safely
   let clock = Date.now()
   const service = createQualityService(store, (_, keys) => nodes.filter(n => keys.has(n.key)), () => clock)
   const config = { ...qualityDefaults, ai: false }
-  const make = () => service.create(profile, { keys: nodes.map(n => n.key), config }, 'https://submeld.test')
-  assert.throws(() => service.create(profile, { keys: [nodes[0].key], config }, 'http://public.example'), /HTTPS/)
+  // Upgrade fixture: one-shot assignments created before device targeting may finish with their original ticket.
+  const spaces = qualitySpaces(profile.id)
+  const make = () => {
+    const id = randomUUID(), token = randomBytes(32).toString('base64url')
+    const job = { id, createdAt: new Date(clock).toISOString(), expiresAt: new Date(clock + 900000).toISOString(),
+      finishedAt: null, status: 'waiting' as const, total: nodes.length, config, progress: { stage: 'starting' as const, done: 0, total: nodes.length },
+      available: null, failure: null, ticketHash: createHash('sha256').update(token).digest('hex'), workerHash: null, labels: nodes.map(({ key, name, sourceName }) => ({ key, name, sourceName })) }
+    store.set(spaces.jobs, id, job)
+    store.set(spaces.inputs, id, nodes)
+    return { job, pairing: 'https://submeld.test/#' + profile.id + '.' + id + '.' + token }
+  }
   const first = make()
   assert.equal(first.job.total, 211)
-  assert.throws(make)
-  assert.throws(() => service.create(profile, { keys: [], config }, 'https://submeld.test'))
-  assert.throws(() => service.create(profile, { keys: [nodes[0].key], config: { ...config, concurrency: 1000 } }, 'https://submeld.test'))
   const body = { profileId: profile.id, jobId: first.job.id, worker: randomBytes(32).toString('base64url') }
   const parsePairing = (link: string) => ({ ticket: new URL(link).hash.split('.').at(-1)! })
   const token = parsePairing(service.pair(profile.id, first.job.id, 'https://submeld.test').pairing).ticket
@@ -68,7 +74,7 @@ test('quality jobs bind a single worker to an immutable selection, expire safely
   const stale = make()
   service.agent('claim', parsePairing(stale.pairing).ticket, { ...body, jobId: stale.job.id })
   clock += 120_001
-  assert.equal(service.list(profile.id)[0].failure, 'disconnected')
+  assert.equal(service.list(profile.id).find(j => j.id === stale.job.id)?.failure, 'disconnected')
 })
 test('a paired PC claims queued jobs across disconnects and loses access immediately when unpaired', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'submeld-device-test-'))
@@ -85,12 +91,12 @@ test('a paired PC claims queued jobs across disconnects and loses access immedia
   const request = { profileId: profile.id, worker }
   const enrollment = { profileId: profile.id, name: 'Desk PC', platform: 'windows', secret }
   const invite = () => parseInvite(service.invite(profile.id, origin).pairing).ticket
-  const queue = () => service.queue(profile, { keys: [node.key], config: qualityDefaults })
+  const queue = (id: string) => service.queue(profile, { keys: [node.key], config: qualityDefaults, targetDeviceId: id })
   assert.throws(() => service.invite(profile.id, 'http://submeld.test'), /HTTPS/)
-  const first = queue()
+  assert.throws(() => service.queue(profile, { keys: [node.key], config: qualityDefaults }))
   const expired = invite()
   clock += 16 * 60_000
-  assert.equal(service.list(profile.id)[0].status, 'waiting')
+  assert.equal(service.list(profile.id).length, 0)
   assert.throws(() => service.agent('enroll', expired, enrollment))
   const replaced = invite()
   const ticket = invite()
@@ -98,34 +104,74 @@ test('a paired PC claims queued jobs across disconnects and loses access immedia
   assert.throws(() => service.agent('enroll', ticket, { ...enrollment, profileId: randomUUID() }))
   for (let i = 0; i < 2; i++) assert.deepEqual(service.agent('enroll', ticket, enrollment), { ok: true })
   assert.throws(() => service.agent('enroll', ticket, { ...enrollment, secret: credential() }))
-  assert.throws(invite)
+  const firstId = service.devices(profile.id)[0].id
+  const otherSecret = credential()
+  service.agent('enroll', invite(), { ...enrollment, secret: otherSecret, name: 'Lab PC' })
+  const secondId = service.devices(profile.id).find(d => d.id !== firstId)!.id
+  service.rename(profile.id, firstId, 'Desk')
+  const first = queue(firstId)
+  assert.equal(first.targetDeviceName, 'Desk')
+  assert.throws(() => queue(firstId))
+  assert.throws(() => service.pair(profile.id, first.id, origin))
+  assert.equal(service.agent('poll', otherSecret, request), null)
+  service.reassign(profile.id, first.id, secondId)
+  assert.equal(service.agent('poll', secret, request), null)
+  service.reassign(profile.id, first.id, firstId)
+  assert.throws(() => service.reassign(randomUUID(), first.id, firstId))
   assert.throws(() => service.agent('poll', secret, { ...request, profileId: randomUUID() }))
   assert.ok(!JSON.stringify(store.all()).includes(secret))
   assert.ok(!JSON.stringify(store.all()).includes(ticket))
   for (let i = 0; i < 2; i++) assert.equal((service.agent('poll', secret, request) as Assignment).jobId, first.id)
   assert.equal(service.agent('poll', secret, { ...request, worker: credential() }), null)
+  assert.equal(service.devices(profile.id).find(d => d.id === firstId)?.status, 'busy')
+  assert.throws(() => service.reassign(profile.id, first.id, secondId))
   const progress = { ...request, jobId: first.id, progress: { stage: 'starting', done: 0, total: 1 } }
   clock += 60_000
   service.agent('progress', worker, progress)
   assert.equal(store.get(qualitySpaces(profile.id).inputs, first.id), null)
   assert.equal(service.agent('poll', secret, request), null)
-  assert.equal(service.device(profile.id)?.lastSeen, new Date(clock).toISOString())
+  assert.equal(service.devices(profile.id).find(d => d.id === firstId)?.lastSeenAt, new Date(clock).toISOString())
   clock += 125_000
-  assert.equal(service.device(profile.id)?.online, false)
+  assert.equal(service.devices(profile.id).find(d => d.id === firstId)?.status, 'offline')
   assert.equal(service.list(profile.id)[0].failure, 'disconnected')
   assert.equal(service.agent('poll', secret, request), null)
-  const next = queue()
+  const next = queue(firstId)
+  assert.throws(() => service.reassign(profile.id, next.id, secondId))
   assert.equal((service.agent('poll', secret, request) as Assignment).jobId, next.id)
   service.agent('leave', secret, request)
-  assert.equal(service.device(profile.id), null)
+  assert.deepEqual(service.devices(profile.id).map(d => d.id), [secondId])
   assert.equal(service.list(profile.id)[0].status, 'cancelled')
   assert.throws(() => service.agent('poll', secret, request))
   assert.throws(() => service.agent('progress', worker, { ...progress, jobId: next.id }))
   assert.throws(() => service.agent('enroll', ticket, enrollment))
-  const offline = queue()
+  const offline = queue(secondId)
   clock += 24 * 60 * 60_000
   assert.equal(service.list(profile.id).find(job => job.id === offline.id)?.status, 'expired')
   assert.equal(store.get(qualitySpaces(profile.id).inputs, offline.id), null)
+})
+
+test('upgraded devices keep their credentials and legacy waiting jobs require a deliberate assignment', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'submeld-probe-migration-'))
+  const store = openStore(dir)
+  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }) })
+  const profileId = randomUUID(), id = randomUUID(), secret = randomBytes(32).toString('base64url')
+  const spaces = qualitySpaces(profileId)
+  const time = new Date().toISOString()
+  const node = { key: profileId + '/node0001', name: 'A', sourceName: '旧方案', connection: { type: 'http', server: 'localhost', port: 1 } }
+  store.set(spaces.device, 'registration', { name: '旧探针', platform: 'linux', lastSeen: time, secretHash: createHash('sha256').update(secret).digest('hex') })
+  store.set(spaces.device, 'next', id)
+  store.set(spaces.jobs, id, { id, createdAt: time, expiresAt: new Date(Date.now() + 60000).toISOString(), finishedAt: null,
+    status: 'waiting', config: qualityDefaults, total: 1, progress: { stage: 'starting', done: 0, total: 1 }, available: null,
+    failure: null, ticketHash: null, workerHash: null, labels: [{ key: node.key, name: node.name, sourceName: node.sourceName }] })
+  store.set(spaces.inputs, id, [node])
+  const service = createQualityService(store, () => [node])
+  const body = { profileId, worker: randomBytes(32).toString('base64url') }
+  assert.equal(service.agent('poll', secret, body), null)
+  const [device] = service.devices(profileId)
+  assert.equal(device.name, '旧探针')
+  service.reassign(profileId, id, device.id)
+  assert.equal((service.agent('poll', secret, body) as Assignment).jobId, id)
+  assert.equal(service.devices(profileId).length, 1)
 })
 
 test('measurements distinguish warm handshake success, request loss and insufficient jitter samples', () => {
@@ -140,24 +186,39 @@ test('public platform evidence distinguishes challenge, region, IP ban, login an
   assert.equal(classify('grok', page(403, '', '', true)).state, 'challenge')
   assert.equal(classify('grok', page(403, 'Not available in your country')).state, 'region_restricted')
   assert.equal(classify('grok', page(429)).state, 'rate_limited')
-  assert.equal(classify('chatgptWeb', page(200, '<title>ChatGPT</title><script>const message="not available in your country"</script>')).state, 'reachable')
+  assert.equal(classify('chatgptWeb', page(200, '{"cookie_consent_required":false,"country_code":"jp"}')).providerRegion, 'JP')
+  assert.equal(classify('chatgptWeb', page(200, '{"cookie_consent_required":false}')).state, 'reachable')
+  assert.equal(classify('chatgptWeb', page(200, 'invalid JSON')).needsReview, true)
   assert.equal(classify('grok', page(200, '<title>Access denied | Grok</title>')).needsReview, true)
-  assert.equal(classify('chatgptApp', page(404)).needsReview, true)
-  assert.equal(classify('claudeApi', page(401, '{"error":{"type":"authentication_error"}}')).state, 'authentication')
+  assert.equal(classify('chatgptApp', page(404, 'Not Found')).state, 'reachable')
+  for (const message of ['VPN required', '{"vpn_detected":true}', 'something went wrong', 'unable to load site']) assert.equal(classify('chatgptApp', page(200, message)).state, 'unavailable')
+  assert.equal(classify('claudeApi', null).needsReview, false)
+  assert.equal(classify('gemini', page(403, '', '', true), 'JP').state, 'unavailable')
+  assert.equal(classify('gemini', page(403), 'HK').state, 'unavailable')
+  assert.equal(classify('gemini', page(403), 'RU').state, 'region_restricted')
+  assert.equal(classify('claudeWeb', page(403), 'HK').state, 'region_restricted')
+  assert.equal(classify('claudeWeb', page(302, '', '/login')).needsReview, false)
+  assert.equal(classify('claudeWeb', page(302, '', 'https://www.claude.com/app-unavailable-in-region')).state, 'region_restricted')
+  assert.equal(classify('claudeApi', page(401, '{"error":{"message":"x-api-key is required"}}')).state, 'reachable')
   assert.equal(classify('claudeWeb', page(302, '', 'https://unknown.example/login')).state, 'unknown')
-  const gemini = classify('gemini', page(200, '<title>Gemini</title>'))
-  const country = googleRegion('{"INNERTUBE_CONTEXT":{"client":{"hl":"en","gl":"CN"}}}')
-  assert.equal(verifyGemini(gemini, 'JP', country).state, 'region_mismatch')
-  assert.equal(verifyGemini(gemini, 'CN', 'CN').needsReview, true)
+  const gemini = classify('gemini', page(200, '<title>Gemini</title><script>x=[0,2,1,200,"JPN"]</script>'), 'JP')
+  assert.equal(gemini.state, 'reachable')
+  assert.equal(gemini.providerRegion, 'JP')
+  assert.equal(googleRegion('["K4WWud", "[\"USA\"]"]'.replaceAll('\\','')), 'US')
+  assert.equal(verifyGemini(gemini, 'JP', 'US').state, 'region_mismatch')
+  assert.equal(verifyGemini(gemini, 'CN', 'CN').state, 'region_restricted')
+  assert.deepEqual(classify('gemini', page(200, ',2,1,200,"RUS"'), 'HK'), {
+    state: 'region_restricted', evidence: 'region_denied', httpStatus: 200, providerRegion: 'RU', needsReview: false,
+  })
   assert.equal(verifyGemini(gemini, 'JP', null).state, 'unknown')
-  assert.equal(verifyGemini(gemini, 'HK', 'HK').state, 'reachable')
   assert.throws(() => parseInvite('http://public.example/#a'))
 })
 
 test('the browser-protocol probe collects separate surface evidence and verifies the Google region', async t => {
   const edge = http.createServer((req, res) => {
     const host = new URL(req.url!, 'http://fixture.invalid').pathname.slice(1)
-    if (host === 'www.youtube.com') res.end('{"INNERTUBE_CONTEXT_GL":"CN"}')
+    if (host === 'gemini.google.com') { assert.match(req.headers.cookie ?? '', /SOCS=/); res.end('<title>Gemini</title>,2,1,200,"USA"') }
+    else if (host === 'api.openai.com') res.end('{"cookie_consent_required":false,"region":"JP"}')
     else if (host === 'grok.com') res.writeHead(403, { 'cf-mitigated': 'challenge' }).end('challenge')
     else if (host === 'api.anthropic.com') res.writeHead(401).end('{"error":{"type":"authentication_error"}}')
     else if (host === 'android.chat.openai.com') res.writeHead(403).end('{"error":{"code":"unsupported_country_region_territory"}}')
@@ -176,8 +237,8 @@ test('the browser-protocol probe collects separate surface evidence and verifies
   assert.equal(ai.chatgptWeb.state, 'reachable')
   assert.equal(ai.chatgptApp.state, 'region_restricted')
   assert.equal(ai.gemini.state, 'region_mismatch')
-  assert.equal(ai.gemini.providerRegion, 'CN')
+  assert.equal(ai.gemini.providerRegion, 'US')
   assert.equal(ai.claudeWeb.evidence, 'login_redirect')
-  assert.equal(ai.claudeApi.state, 'authentication')
+  assert.equal(ai.claudeApi.state, 'reachable')
   assert.equal(ai.grok.state, 'challenge')
 })

@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { surfaces } from '../shared/quality-options.ts'
+import { qualityKey } from '../shared/quality.ts'
 import { regions } from '../shared/catalog.ts'
 import { compilePoolPattern, maxPatternLength } from '../shared/group-filter.ts'
 import { classicalEntry } from '../shared/config.ts'
@@ -32,10 +34,17 @@ export const source = z.object({
   renewalDate: z.iso.date().optional(),
 })
 const groupPattern = text(maxPatternLength).refine(value => !compilePoolPattern(value).error, '请填写有效的 RE2 正则表达式。')
+const qualityCondition = z.strictObject({
+  alive: z.boolean().optional(), maxLatencyMs: z.number().min(0).max(600000).optional(),
+  maxLossRate: z.number().min(0).max(1).optional(), minBandwidthMbps: z.number().min(0).max(1000000).optional(),
+  platforms: z.array(z.enum(surfaces)).max(surfaces.length).optional(),
+  untestedPolicy: z.enum(['include', 'exclude']).optional(), fallbackWhenEmpty: z.boolean().optional(),
+})
 const pool = z.object({
   kind: z.literal('pool'), regions: array(region, 60),
   sourceId: z.union([id, z.literal('')]).optional(), sourceIds: array(id).optional(),
-  includeRegex: groupPattern.optional(), excludeRegex: groupPattern.optional(),
+  includeRegex: groupPattern.optional(), excludeRegex: groupPattern.optional(), quality: qualityCondition.optional(),
+  search: text(256).optional(), noteMatches: z.array(qualityKey).max(16000).optional(), nodeKeys: z.array(qualityKey).max(16000).optional(),
 }).refine(value => (value.sourceIds !== undefined) !== (value.sourceId !== undefined), '请选择来源。')
 const member = z.discriminatedUnion('kind', [
   pool,

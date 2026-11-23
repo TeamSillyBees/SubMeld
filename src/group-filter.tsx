@@ -2,7 +2,11 @@ import type { Pool, Source, NodeView } from '../shared/model.ts'
 import { useMemo, useState } from 'react'
 import { ChevronDown, Filter, Plus } from 'lucide-react'
 import { regions } from '../shared/catalog.ts'
-import { compilePoolFilter, poolCondition } from '../shared/group-filter.ts'
+import { resolvePool, poolCondition } from '../shared/group-filter.ts'
+import { QualityControl } from './quality.tsx'
+import { useProject } from './project.tsx'
+import { PoolQuality, reasonNames } from './pool-quality.tsx'
+import { maxQualityNodes } from '../shared/quality-options.ts'
 import { Button, CheckOption, Field, FieldLegend, FieldSet, Input, Pager, formatNumber, usePage } from './ui.tsx'
 
 const commonRegions = new Set(['US', 'HK', 'JP', 'SG', 'TW', 'KR', 'GB', 'DE', 'FR', 'CA', 'AU', 'unknown'])
@@ -10,13 +14,15 @@ const toggleValue = (items: string[], id: string) => items.includes(id) ? items.
 
 export function GroupFilter({ member, index, sources, nodes, onChange, onNew, headingRef }: { member?: Pool | null; index: number; sources: Source[]; nodes: NodeView[]; onChange: (pool: Pool) => void; onNew: () => void; headingRef: React.RefObject<HTMLHeadingElement | null> }) {
   const value = useMemo(() => poolCondition(member ?? {}), [member])
-  const filter = useMemo(() => compilePoolFilter(value), [value])
-  const matches = useMemo(() => nodes.filter(filter.matches), [nodes, filter])
+  const { quality } = useProject()
+  const filter = useMemo(() => resolvePool(value, nodes, quality.snapshot), [value, nodes, quality.snapshot])
+  const { matches } = filter
   const [moreRegions, setMoreRegions] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [offset, setOffset] = usePage(matches.length, 20)
   const visibleRegions = regions.filter(([id]) => moreRegions || commonRegions.has(id) || value.regions.includes(id))
   const invalid = Boolean(filter.includeError || filter.excludeError)
+  const awaitingQuality = !!value.quality && !quality.ready
   function change<K extends keyof Pool>(key: K, next: Pool[K]) {
     setOffset(0)
     onChange({ ...value, [key]: next })
@@ -50,13 +56,19 @@ export function GroupFilter({ member, index, sources, nodes, onChange, onNew, he
         <p className="field-note muted">按节点名（含前缀）匹配，命中排除正则时跳过。使用 RE2 语法，默认忽略大小写。</p>
       </div>
     </div>
-    <div className="pool-preview">
+    {(value.search || value.nodeKeys || value.noteMatches?.length) && <p className="field-note">来自节点列表{value.search && ' · 搜索「' + value.search + '」'}{value.nodeKeys && ' · 已限定 ' + value.nodeKeys.length + ' 个节点'}{!!value.noteMatches?.length && ' · 含 ' + value.noteMatches.length + ' 个备注匹配'}</p>}
+    <PoolQuality value={value.quality} change={next => change('quality', next)} />
+    {awaitingQuality ? <p className="field-note muted" role="status">{quality.error ? '重新读取报告后可预览质量条件。' : '正在读取质量报告…'}</p> : <div className="pool-preview">
+      {value.quality && <div className="quality-funnel"><p>基础候选 <strong>{filter.candidates.length}</strong> → 通过质量条件 <strong>{filter.passed.length}</strong>{filter.fallback && ' → 兜底恢复 ' + matches.length + ' 个节点'}</p>
+        {!!Object.keys(filter.reasons).length && <p className="field-note muted">{Object.entries(filter.reasons).map(([reason, n]) => reasonNames[reason] + ' ' + n).join(' · ')}</p>}
+        {!!filter.untested.length && <QualityControl selected={filter.untested.slice(0, maxQualityNodes)} filtered={filter.untested.slice(0, maxQualityNodes)} supplement bandwidth={value.quality.minBandwidthMbps != null} />}
+      </div>}
       <div className="between flex-wrap"><strong role="status">{invalid ? '请修正正则后查看预览' : '匹配 ' + formatNumber(matches.length) + ' 个保留节点'}</strong>
         <div className="actions">{matches.length > 3 && <Button size="small" variant="ghost" aria-expanded={expanded} onClick={() => { setOffset(0); setExpanded(!expanded) }}>{expanded ? '收起预览' : '查看全部匹配'}</Button>}
           {!member && <Button size="small" icon={Plus} onClick={() => onChange(value)}>加入全部保留节点</Button>}</div></div>
       {!invalid && (matches.length ? <ul className="pool-sample">{(expanded ? matches.slice(offset, offset + 20) : matches.slice(0, 3)).map(node =>
         <li key={node.key} title={node.sourceName + ' · ' + node.name}>{node.name}</li>)}</ul> : <p className="field-note muted">当前没有匹配节点，可调整条件或等待来源更新。</p>)}
       {expanded && matches.length > 20 && <Pager offset={offset} count={matches.length} pageSize={20} onChange={setOffset} />}
-    </div>
+    </div>}
   </section>
 }

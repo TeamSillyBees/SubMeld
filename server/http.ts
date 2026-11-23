@@ -144,14 +144,17 @@ export function createApplication(options: Options = {}) {
       }
       let result
       switch (route) {
-        case 'GET /api/quality/device': result = quality.device(workspace.profileFor(profile).id); break
+        case 'GET /api/quality/devices': result = quality.devices(workspace.profileFor(profile).id); break
+        case 'POST /api/quality/rename': result = quality.rename(workspace.profileFor(profile).id, body.id, body.remark); break
+        case 'POST /api/quality/reassign': result = quality.reassign(workspace.profileFor(profile).id, body.id, body.targetDeviceId); break
         case 'POST /api/quality/invite': result = quality.invite(workspace.profileFor(profile).id, publicUrl?.origin ?? origin); break
-        case 'POST /api/quality/revoke': result = quality.revoke(workspace.profileFor(profile).id); break
+        case 'POST /api/quality/revoke': result = quality.revoke(workspace.profileFor(profile).id, body.id); break
         case 'POST /api/quality/queue': result = quality.queue(workspace.profileFor(profile), body); break
         case 'GET /api/quality/jobs': result = quality.list(workspace.profileFor(profile).id); break
-        case 'POST /api/quality/create': result = quality.create(workspace.profileFor(profile), body, publicUrl?.origin ?? origin); break
+        case 'POST /api/quality/create': result = quality.queue(workspace.profileFor(profile), body); break
         case 'POST /api/quality/pair': result = quality.pair(workspace.profileFor(profile).id, body.id, publicUrl?.origin ?? origin); break
         case 'POST /api/quality/cancel': result = quality.cancel(workspace.profileFor(profile).id, body.id); break
+        case 'GET /api/quality/snapshot': result = workspace.snapshotFor(workspace.profileFor(profile), address.searchParams.get('id')); break
         case 'GET /api/quality/report': result = quality.report(workspace.profileFor(profile).id, address.searchParams.get('id')); break
         case 'GET /api/quality/download': {
           const filename = 'submeld-quality-probe.tgz'
@@ -174,8 +177,8 @@ export function createApplication(options: Options = {}) {
         case 'POST /api/candidate': result = await workspace.candidate(profile, body.id, body.accept === true); break
         case 'POST /api/match': result = await workspace.match(profile, owner!, body); break
         case 'GET /api/provider-content': result = workspace.providerContent(profile, address.searchParams.get('id'), page, (address.searchParams.get('q') ?? '').slice(0, 500)); break
-        case 'POST /api/check': result = await workspace.check(profile); break
-        case 'POST /api/publish': result = await workspace.publish(profile, body.revision); break
+        case 'POST /api/check': result = await workspace.check(profile, body.qualityReportId); break
+        case 'POST /api/publish': result = await workspace.publish(profile, body.revision, body.qualityReportId); break
         case 'POST /api/rollback': result = await workspace.rollback(profile, body.seq); break
         case 'GET /api/current': result = workspace.current(profile); break
         case 'GET /api/history': result = workspace.history(profile, page); break

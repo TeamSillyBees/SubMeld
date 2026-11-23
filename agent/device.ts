@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { assignmentSchema } from '../shared/quality.ts'
 import { secureProbeOrigin } from '../shared/quality-options.ts'
 import { AgentHttpError, execute, post } from './client.ts'
+import { capabilities } from './capabilities.ts'
 
 const profile = /^[\w-]{8,64}$/
 const token = /^[\w-]{43}$/
@@ -25,9 +26,10 @@ export function parseInvite(value: string) {
   }
   return { origin: url.origin, profileId, ticket }
 }
-export async function enroll(identity: Identity, ticket: string, signal: AbortSignal) {
+export async function enroll(identity: Identity, ticket: string, signal: AbortSignal, binary: string) {
   await post(identity.origin, 'enroll', ticket, { profileId: identity.profileId, secret: identity.secret,
-    name: hostname().slice(0, 128), platform: process.platform === 'win32' ? 'windows' : 'linux' }, signal)
+    name: hostname().slice(0, 128), platform: process.platform === 'win32' ? 'windows' : 'linux',
+    capabilities: await capabilities(binary, identity.interface, signal) }, signal)
 }
 export async function leave(identity: Identity) {
   try {
@@ -40,12 +42,19 @@ export async function serve(identity: Identity, binary: string, directory: strin
   let backoff = 15_000
   let disconnected = false
   let worker = randomBytes(32).toString('base64url')
+  let profile: Awaited<ReturnType<typeof capabilities>> | undefined
+  let refreshAt = 0
   console.log('探针正在等待 ' + identity.origin + ' 的检测任务。')
   if (identity.interface) process.env.SUBMELD_PROBE_INTERFACE = identity.interface
   while (!signal.aborted) {
-    let pause = 15_000
+    let pause = 0
     try {
-      const value = await post(identity.origin, 'poll', identity.secret, { profileId: identity.profileId, worker }, signal)
+      if (!profile || Date.now() >= refreshAt) {
+        profile = await capabilities(binary, identity.interface, signal)
+        refreshAt = Date.now() + 15 * 60_000
+      }
+      const started = Date.now()
+      const value = await post(identity.origin, 'poll', identity.secret, { profileId: identity.profileId, worker, capabilities: profile, wait: true }, signal)
       if (disconnected) console.log('已重新连接工作台。')
       disconnected = false
       backoff = 15_000
@@ -55,8 +64,7 @@ export async function serve(identity: Identity, binary: string, directory: strin
         const job = assignmentSchema.parse(value)
         try { await execute(job, identity.origin, identity.profileId, claimedWorker, binary, directory, signal) }
         catch (error) { if (!signal.aborted) console.error(error instanceof Error ? error.message : '任务失败。') }
-        pause = 0
-      }
+      } else if (Date.now() - started < 1000) pause = 1000
     } catch (error) {
       if (signal.aborted) break
       if (!disconnected) console.error(error instanceof Error ? error.message : '暂时无法连接工作台。')
@@ -66,4 +74,5 @@ export async function serve(identity: Identity, binary: string, directory: strin
     }
     if (pause) await delay(pause, undefined, { signal }).catch(() => {})
   }
+  await post(identity.origin, 'offline', identity.secret, { profileId: identity.profileId }, AbortSignal.timeout(2000)).catch(() => {})
 }

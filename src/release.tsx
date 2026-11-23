@@ -111,7 +111,7 @@ export function PublishPage() {
     setError('')
     setBusy('check')
     try {
-      const next = await call('check', { qualityReportId: quality.reportId })
+      const next = await call('check', { expectedQualityReportId: quality.reportId })
       setChecked({ revision: next.revision, view, result: next })
     } catch (cause) { const error = asError(cause); setError(error.message) } finally { setBusy('') }
   }
@@ -122,7 +122,7 @@ export function PublishPage() {
     setBusy('publish')
     setError('')
     try {
-      const next = await call('publish', { revision: state.revision, qualityReportId: quality.reportId })
+      const next = await call('publish', { revision: state.revision, expectedQualityReportId: quality.reportId })
       applyState(next)
       setChecked(null)
       setMode('current')

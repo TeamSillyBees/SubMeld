@@ -7,7 +7,7 @@ import { stageRuntime } from './runtime.ts'
 import { AgentHttpError } from './client.ts'
 import { enroll, identitySchema, leave, parseInvite, type Identity } from './device.ts'
 import {
-  activate, atomicWrite, configFile, ensureInstallDirectory, exists, installDir,
+  activate, atomicWrite, configFile, coreName, ensureInstallDirectory, exists, installDir,
   prepareHost, removeService, requireAdmin, runtime, serviceName, serviceStatus, stateDir, stopService,
 } from './service.ts'
 
@@ -15,7 +15,7 @@ const pending = join(installDir, 'pending.json')
 export async function readIdentity(path: string): Promise<Identity> {
   return identitySchema.parse(JSON.parse(await readFile(path, 'utf8')))
 }
-async function pair(previous: Identity | null, replace: boolean) {
+async function pair(previous: Identity | null, replace: boolean, binary: string) {
   if (previous && !replace && !await exists(pending)) {
     if (process.env.SUBMELD_PROBE_INTERFACE !== undefined) {
       const updated = identitySchema.parse({ ...previous, interface: process.env.SUBMELD_PROBE_INTERFACE || undefined })
@@ -38,7 +38,7 @@ async function pair(previous: Identity | null, replace: boolean) {
     await atomicWrite(pending, JSON.stringify(proposed), 0o600)
   }
   const identity = identitySchema.parse(proposed)
-  try { await enroll(identity, proposed.ticket, AbortSignal.timeout(65_000)) }
+  try { await enroll(identity, proposed.ticket, AbortSignal.timeout(65_000), binary) }
   catch (error) {
     if (error instanceof AgentHttpError && error.status === 403) throw new Error('配对链接已失效，请复制新的电脑配对链接并运行 submeld-probe install --pair。')
     throw error
@@ -56,7 +56,7 @@ async function install(replace: boolean) {
   try {
     await stageRuntime(stage)
     const previous = await exists(configFile) ? await readIdentity(configFile) : null
-    await pair(previous, replace)
+    await pair(previous, replace, join(stage, coreName))
     if (before.installed && (before.running || process.platform === 'linux')) await stopService()
     // Recover the previous release if setup was interrupted between the two renames.
     if (!await exists(runtime) && await exists(old)) await rename(old, runtime)

@@ -3,10 +3,10 @@ import { z } from 'zod'
 import type { Store } from './store.ts'
 import type { Profile } from '../shared/model.ts'
 import {
-  maxQualityNodes, progressSchema, qualityConfig, qualityKey, reportSchema,
+  maxQualityNodes, probeCapabilities, progressSchema, qualityConfig, qualityKey, reportSchema,
   type Assignment, type DevicePairing, type ProbeDevice, type Pairing, type QualityJob, type QualityNode, type QualityReport,
 } from '../shared/quality.ts'
-import { aiSkipReason, secureProbeOrigin } from '../shared/quality-options.ts'
+import { aiSkipReason, compatibleProbe, minimumProbeVersion, probePollMs, probeQueueLimit, secureProbeOrigin } from '../shared/quality-options.ts'
 import { id, read, UserError } from './schema.ts'
 
 const waitingMs = 15 * 60_000
@@ -25,7 +25,7 @@ export const qualitySpaces = (profileId: string) => ({
   inputs: `quality-inputs/${profileId}` as const,
   reports: `quality-reports/${profileId}` as const,
 })
-export interface StoredDevice extends Omit<ProbeDevice, 'status'> { secretHash: string }
+export interface StoredDevice extends Omit<ProbeDevice, 'status' | 'waiting'> { secretHash: string; offline?: boolean }
 export interface LegacyDevice { name: string; platform: StoredDevice['platform']; lastSeen: string; secretHash: string }
 export interface StoredInvite { ticketHash: string; expiresAt: string }
 export interface StoredQualityJob extends QualityJob {
@@ -34,6 +34,10 @@ export interface StoredQualityJob extends QualityJob {
 function summary({ resident, ticketHash, workerHash, labels, ...job }: StoredQualityJob): QualityJob { return job }
 
 export function createQualityService(store: Store, select: (profile: Profile, keys: Set<string>) => QualityNode[], now = Date.now) {
+  const waiters = new Map<string, (check: boolean) => void>()
+  let closing = false
+  const wake = (profileId: string, deviceId?: string | null) => waiters.get(profileId + '/' + deviceId)?.(true)
+  const offline = (d: StoredDevice) => d.offline || now() - Date.parse(d.lastSeenAt) >= 35_000
   function registry(profileId: string) {
     const spaces = qualitySpaces(profileId)
     const old = store.get(spaces.device, 'registration')
@@ -56,8 +60,13 @@ export function createQualityService(store: Store, select: (profile: Profile, ke
   }
   function devices(profileId: string): ProbeDevice[] {
     const records = registry(profileId)
-    const busy = new Set(list(profileId).filter(j => j.status === 'running').map(j => j.targetDeviceId))
-    return records.map(({ secretHash, ...d }) => ({ ...d, status: now() - Date.parse(d.lastSeenAt) >= 90_000 ? 'offline' : busy.has(d.id) ? 'busy' : 'online' }))
+    const jobs = list(profileId)
+    return records.map(device => {
+      const { secretHash, offline: left, ...d } = device
+      const own = jobs.filter(j => j.targetDeviceId === d.id)
+      return { ...d, status: offline(device) ? 'offline' : own.some(j => j.status === 'running') ? 'busy' : 'online',
+        waiting: own.filter(j => j.status === 'waiting').length }
+    })
   }
   function finish(profileId: string, job: StoredQualityJob, status: QualityJob['status'], failure: QualityJob['failure'] = null) {
     const spaces = qualitySpaces(profileId)
@@ -69,6 +78,7 @@ export function createQualityService(store: Store, select: (profile: Profile, ke
     if (status !== 'completed') job.workerHash = null
     store.remove(spaces.inputs, job.id)
     store.set(spaces.jobs, job.id, job)
+    wake(profileId, job.targetDeviceId)
   }
   function checkExpiry(profileId: string, job: StoredQualityJob) {
     if ((job.status === 'running' || job.status === 'waiting') && Date.parse(job.expiresAt) <= now()) {
@@ -98,26 +108,46 @@ export function createQualityService(store: Store, select: (profile: Profile, ke
     const keys = new Set(read(keySchema, body.keys))
     const config = read(qualityConfig, body.config)
     const history = list(profile.id)
-    if (history.some(job => job.targetDeviceId === target.id && (job.status === 'waiting' || job.status === 'running'))) throw new UserError('这台探针已有检测任务，请先完成或取消。', 409)
+    const enqueuedAt = queueSlot(target, history)
     const nodes = select(profile, keys)
     if (keys.size !== nodes.length) throw new UserError('部分节点已更新，请刷新节点列表后重新选择。', 409)
     if (Buffer.byteLength(JSON.stringify(nodes)) > 8 * 1024 ** 2) throw new UserError('节点配置较大，请分批检测。', 413)
     const job: StoredQualityJob = {
       id: randomUUID(), createdAt: date(now()), finishedAt: null, expiresAt: date(now() + queueMs), status: 'waiting',
-      targetDeviceId: target.id, targetDeviceName: target.remark || target.name,
+      targetDeviceId: target.id, targetDeviceName: target.remark || target.name, enqueuedAt,
       config, total: nodes.length, progress: { stage: 'starting', done: 0, total: nodes.length }, available: null,
       failure: null, ticketHash: null, workerHash: null, labels: nodes.map(({ key, name, sourceName }) => ({ key, name, sourceName })),
     }
     const spaces = qualitySpaces(profile.id)
-    return store.transaction(() => {
-      for (const old of history.filter(j => j.status !== 'waiting' && j.status !== 'running').slice(historyLimit - 1)) for (const space of [spaces.jobs, spaces.inputs, spaces.reports]) store.remove(space, old.id)
+    const queued = store.transaction(() => {
+      const newest = history.filter(j => j.status === 'completed').sort((a, b) => (b.finishedAt ?? '').localeCompare(a.finishedAt ?? '') || b.id.localeCompare(a.id))
+      const protectedIds = new Set<string>()
+      const seenDevices = new Set<string | null | undefined>()
+      for (const job of newest) if (!seenDevices.has(job.targetDeviceId)) {
+        protectedIds.add(job.id)
+        seenDevices.add(job.targetDeviceId)
+      }
+      const policy = profile.draft?.qualityBaselinePolicy
+      if (policy?.mode === 'fixed') protectedIds.add(policy.reportId)
+      for (const old of history.filter(j => j.status !== 'waiting' && j.status !== 'running').slice(historyLimit - 1)) {
+        if (!protectedIds.has(old.id)) for (const space of [spaces.jobs, spaces.inputs, spaces.reports]) store.remove(space, old.id)
+      }
       store.set(spaces.inputs, job.id, nodes)
       store.set(spaces.jobs, job.id, job)
       return summary(job)
     })
+    wake(profile.id, target.id)
+    return queued
+  }
+  function queueSlot(target: StoredDevice, jobs: QualityJob[], exclude?: string) {
+    if (offline(target)) throw new UserError('探针已离线，请选择在线探针。', 409)
+    if (!compatibleProbe(target)) throw new UserError('请先更新探针至 ' + minimumProbeVersion + ' 或兼容版本。', 409)
+    const waiting = jobs.filter(j => j.status === 'waiting' && j.targetDeviceId === target.id && j.id !== exclude)
+    if (waiting.length >= probeQueueLimit) throw new UserError('这台探针的等待队列已满。', 409)
+    return date(Math.max(now(), ...waiting.map(j => Date.parse(j.enqueuedAt ?? j.createdAt) + 1)))
   }
   function touch(space: `quality-devices/${string}`, device: StoredDevice | null) {
-    if (device && now() - Date.parse(device.lastSeenAt) >= 15_000) store.set(space, device.id, { ...device, lastSeenAt: date(now()) })
+    if (device && (device.offline || now() - Date.parse(device.lastSeenAt) >= 8000)) store.set(space, device.id, { ...device, offline: false, lastSeenAt: date(now()) })
   }
   function claim(profileId: string, job: StoredQualityJob, worker: string, resident: boolean): Assignment {
     const spaces = qualitySpaces(profileId)
@@ -138,11 +168,48 @@ export function createQualityService(store: Store, select: (profile: Profile, ke
     return store.transaction(() => {
       for (const j of jobs) finish(profileId, store.get(spaces.jobs, j.id)!, 'cancelled')
       store.remove(spaces.devices, device.id)
+      wake(profileId, device.id)
       return { ok: true }
+    })
+  }
+  function nextAssignment(profileId: string, device: StoredDevice, worker: string) {
+    const spaces = qualitySpaces(profileId)
+    const jobs = list(profileId).filter(job => job.targetDeviceId === device.id)
+    const running = jobs.find(job => job.status === 'running')
+    if (running) {
+      const job = find(profileId, running.id)
+      return job.resident && same(job.workerHash, worker) && store.get(spaces.inputs, job.id) ? claim(profileId, job, worker, true) : null
+    }
+    if (!compatibleProbe(device)) return null
+    const first = jobs.filter(j => j.status === 'waiting').sort((a, b) =>
+      (a.enqueuedAt ?? a.createdAt).localeCompare(b.enqueuedAt ?? b.createdAt) || a.id.localeCompare(b.id))[0]
+    return first ? claim(profileId, find(profileId, first.id), worker, true) : null
+  }
+  function waitForJob(profileId: string, device: StoredDevice, worker: string, signal?: AbortSignal) {
+    const key = profileId + '/' + device.id
+    waiters.get(key)?.(false)
+    return new Promise<boolean>(resolve => {
+      const done = (check: boolean) => {
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', abort)
+        waiters.delete(key)
+        resolve(check)
+      }
+      const abort = () => done(false)
+      const timer = setTimeout(abort, probePollMs)
+      waiters.set(key, done)
+      signal?.addEventListener('abort', abort, { once: true })
+      if (signal?.aborted || closing) abort()
+    }).then(check => {
+      if (!check || signal?.aborted || closing) return null
+      const current = store.get(qualitySpaces(profileId).devices, device.id)
+      if (!current) throw new UserError('这台电脑的配对已解除。', 403)
+      return current.offline ? null : nextAssignment(profileId, current, worker)
     })
   }
   return {
     list, devices, revoke, queue,
+    close() { closing = true; for (const done of waiters.values()) done(false) },
     rename(profileId: string, id: unknown, input: unknown) {
       const device = deviceFor(profileId, id)
       const remark = read(z.string().trim().max(80), input)
@@ -153,14 +220,14 @@ export function createQualityService(store: Store, select: (profile: Profile, ke
       const target = deviceFor(profileId, targetDeviceId)
       const job = find(profileId, id)
       if (job.status !== 'waiting') throw new UserError('只能改派等待中的任务。', 409)
-      if (now() - Date.parse(target.lastSeenAt) >= 90_000 || list(profileId).some(j => j.id !== job.id && j.targetDeviceId === target.id && (j.status === 'waiting' || j.status === 'running'))) {
-        throw new UserError('请选择在线且空闲的探针。', 409)
-      }
+      if (job.targetDeviceId === target.id) return summary(job)
+      job.enqueuedAt = queueSlot(target, list(profileId), job.id)
       job.targetDeviceId = target.id
       job.targetDeviceName = target.remark || target.name
       job.ticketHash = null
       job.expiresAt = date(now() + queueMs)
       store.set(qualitySpaces(profileId).jobs, job.id, job)
+      wake(profileId, target.id)
       return summary(job)
     },
     clean() { for (const [profileId] of store.list('profiles')) list(profileId) },
@@ -188,38 +255,40 @@ export function createQualityService(store: Store, select: (profile: Profile, ke
       if (!report) throw new UserError('此任务尚无完成报告。', 404)
       return report
     },
-    agent(action: string, bearer: string, body: Record<string, unknown>) {
+    agent(action: string, bearer: string, body: Record<string, unknown>, signal?: AbortSignal) {
       const profileId = read(id, body.profileId)
       const spaces = qualitySpaces(profileId)
       if (action === 'enroll') {
         const secret = read(z.string().regex(opaque), body.secret)
         const name = read(z.string().trim().min(1).max(128), body.name)
         const platform = read(z.enum(['windows', 'linux']), body.platform)
+        const profile = read(probeCapabilities.optional(), body.capabilities)
         const existing = registry(profileId).find(d => same(d.secretHash, secret))
         if (existing) return { ok: true }
         const invite = store.get(spaces.device, 'invite')
         if (!invite || !same(invite.ticketHash, bearer) || Date.parse(invite.expiresAt) <= now()) throw new UserError('电脑配对链接已失效。', 403)
         const id = randomUUID()
         return store.transaction(() => {
-          store.set(spaces.devices, id, { id, secretHash: hash(secret), name, remark: '', platform, lastSeenAt: date(now()) })
+          store.set(spaces.devices, id, { id, secretHash: hash(secret), name, remark: '', platform, ...profile, lastSeenAt: date(now()) })
           store.remove(spaces.device, 'invite')
           return { ok: true }
         })
       }
-      if (action === 'poll' || action === 'leave') {
+      if (action === 'poll' || action === 'leave' || action === 'offline') {
         const device = registry(profileId).find(d => same(d.secretHash, bearer))
         if (!device) throw new UserError('这台电脑的配对已解除。', 403)
         if (action === 'leave') return revoke(profileId, device.id)
-        const worker = read(z.string().regex(opaque), body.worker)
-        touch(spaces.devices, device)
-        for (const [, item] of store.list(spaces.jobs)) {
-          if (item.targetDeviceId !== device.id || (item.status !== 'waiting' && item.status !== 'running')) continue
-          const job = checkExpiry(profileId, item)
-          if (job.status === 'waiting' || (job.status === 'running' && job.resident && same(job.workerHash, worker) && store.get(spaces.inputs, job.id))) {
-            return claim(profileId, job, worker, true)
-          }
+        if (action === 'offline') {
+          store.set(spaces.devices, device.id, { ...device, offline: true, lastSeenAt: date(now()) })
+          wake(profileId, device.id)
+          return { ok: true }
         }
-        return null
+        const worker = read(z.string().regex(opaque), body.worker)
+        const profile = read(probeCapabilities.optional(), body.capabilities)
+        const current = { ...device, protocolVersion: undefined, agentVersion: undefined, ...profile, offline: false, lastSeenAt: date(now()) }
+        store.set(spaces.devices, device.id, current)
+        const assignment = nextAssignment(profileId, current, worker)
+        return assignment ?? (body.wait === true ? waitForJob(profileId, current, worker, signal) : null)
       }
       const job = find(profileId, body.jobId)
       if (action === 'claim') {
@@ -250,9 +319,11 @@ export function createQualityService(store: Store, select: (profile: Profile, ke
         }
         for (const row of rows.values()) {
           const successes = row.samples.filter(sample => sample.httpsMs !== null).length
+          // Earlier probes skipped AI when the general-purpose exit lookup failed.
+          const skipReason = row.aiSkipped === 'missing_exit' && !row.exit ? 'missing_exit' : aiSkipReason(row)
           if (row.available !== (successes > 0) || row.samples.length !== (row.error === 'invalid_node' || row.error === 'info_node' ? 0 : job.config.rounds)
             || Boolean(row.speed) !== (job.config.bandwidth && row.available)
-            || (row.aiSkipped && (!job.config.ai || !row.available || row.aiSkipped !== aiSkipReason(row)))
+            || (row.aiSkipped && (!job.config.ai || !row.available || row.aiSkipped !== skipReason))
             || Boolean(row.ai) !== (job.config.ai && row.available && !row.aiSkipped)
             || (row.speed && (row.speed.bytes > job.config.mebibytes * 1024 ** 2 || row.speed.elapsedMs > job.config.seconds * 1000 || row.speed.perSecondBps.length > job.config.seconds))) throw new UserError('结果超出本次检测配置。', 422)
         }

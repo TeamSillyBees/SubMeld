@@ -1,5 +1,6 @@
 import type { FilteredNode, GroupMember, Pool } from './model.ts'
-import type { NodeQuality, QualitySnapshot } from './quality-snapshot.ts'
+import { compareQuality, qualityValue, type NodeQuality, type QualitySnapshot } from './quality-snapshot.ts'
+import { isSubscriptionNotice } from './quality-options.ts'
 import { RE2JS } from 're2js'
 
 export const maxPatternLength = 256
@@ -62,35 +63,86 @@ export const qualityPresets: Record<string, { name: string; condition: QualityCo
   streaming: { name: '流畅视频', condition: { alive: true, minBandwidthMbps: 20, maxLossRate: 0.05 } },
   ai: { name: 'AI 网页', condition: { platforms: ['chatgptWeb', 'gemini', 'claudeWeb', 'grok'] } },
 }
-export function qualityReason(q: QualityCondition, r?: NodeQuality) {
-  if (!r) return 'untested'
-  if (!r.available && (q.alive || q.maxLatencyMs != null || q.maxLossRate != null || q.minBandwidthMbps != null || q.platforms?.length)) return 'unavailable'
-  if (q.maxLatencyMs != null && r.httpsMs !== null && r.httpsMs > q.maxLatencyMs) return 'latency'
-  if (q.maxLossRate != null && r.lossRate !== null && r.lossRate > q.maxLossRate) return 'loss'
-  if (q.minBandwidthMbps != null && (r.speedFailed || r.speedMbps !== null && r.speedMbps < q.minBandwidthMbps)) return 'bandwidth'
-  if (q.platforms?.length && r.reachable && q.platforms.some(s => !r.reachable!.includes(s))) return 'platform'
-  if (q.maxLatencyMs != null && r.httpsMs === null || q.maxLossRate != null && r.lossRate === null ||
-      q.minBandwidthMbps != null && r.speedMbps === null || q.platforms?.length && !r.reachable) return 'untested'
+export function skippedMetrics(q: QualityCondition, config?: QualitySnapshot['config']) {
+  return {
+    bandwidth: config?.bandwidth === false && q.minBandwidthMbps != null,
+    ai: config?.ai === false && Boolean(q.platforms?.length || q.aiPlatforms?.length),
+  }
+}
+export function qualityReason(q: QualityCondition, r?: NodeQuality, config?: QualitySnapshot['config'], allowChallenge = false) {
+  const bandwidth = config?.bandwidth === false ? undefined : q.minBandwidthMbps
+  const surfaces = config?.ai === false ? undefined : q.platforms
+  const platforms = config?.ai === false ? undefined : q.aiPlatforms
+  const hasCriteria = q.alive || q.maxLatencyMs != null || q.maxLossRate != null || q.maxJitterMs != null || bandwidth != null || surfaces?.length || platforms?.length || q.exitRegions?.length
+  if (!r) return hasCriteria ? 'untested' : null
+  if (!r.available && hasCriteria) return 'unavailable'
+  if (q.maxLatencyMs != null && r.httpsMs != null && r.httpsMs > q.maxLatencyMs) return 'latency'
+  if (q.maxLossRate != null && r.lossRate != null && r.lossRate > q.maxLossRate) return 'loss'
+  if (q.maxJitterMs != null && r.jitterMs != null && r.jitterMs > q.maxJitterMs) return 'jitter'
+  if (bandwidth != null && (r.speedFailed || r.speedMbps != null && r.speedMbps < bandwidth)) return 'bandwidth'
+  if (q.exitRegions?.length && r.exitRegion && q.exitRegions.includes(r.exitRegion) === !!q.excludeExitRegions) return 'region'
+  if (surfaces?.length && r.reachable && surfaces.some(s => !r.reachable!.includes(s) && !(allowChallenge && r.surfaceIssues?.[s] === 'degraded_challenge'))) return 'platform'
+  const levels = platforms?.map(p => qualityValue(r, p)) ?? []
+  if (levels.some(level => level !== null && level < (q.minUnlockLevel ?? 2))) return 'platform'
+  if (q.maxLatencyMs != null && r.httpsMs == null || q.maxLossRate != null && r.lossRate == null ||
+      q.maxJitterMs != null && r.jitterMs == null || bandwidth != null && r.speedMbps == null ||
+      q.exitRegions?.length && !r.exitRegion || surfaces?.length && !r.reachable || levels.includes(null)) return 'untested'
   return null
 }
+export const funnelStages = ['source', 'name', 'performance', 'regionAi', 'limit'] as const
+export type FunnelStage = typeof funnelStages[number]
 export function resolvePool<T extends Pick<FilteredNode, 'key' | 'kept' | 'sourceId' | 'name' | 'region'>>(member: Pool, nodes: T[], snapshot: QualitySnapshot | null) {
   const filter = compilePoolFilter(member)
-  const candidates = nodes.filter(filter.matches)
+  const sources = new Set(memberSourceIds(member))
+  const sourceNodes = nodes.filter(n => !sources.size || sources.has(n.sourceId))
+  const removed: { node: T; reason: string; stage: FunnelStage }[] = []
+  const candidates = sourceNodes.filter(node => {
+    if (filter.matches(node)) return true
+    if (member.quality) {
+      const reason = !node.kept ? 'source' : member.regions.length && !member.regions.includes(node.region) ? 'nameRegion' : 'name'
+      removed.push({ node, reason, stage: 'name' })
+    }
+    return false
+  })
   const reasons: Record<string, number> = {}
   const untested: string[] = []
   const quality = member.quality
   const passed = quality ? candidates.filter(node => {
-    const reason = qualityReason(quality, snapshot?.rows[node.key])
+    const reason = qualityReason(quality, snapshot?.rows[node.key], snapshot?.config)
     if (reason === 'untested') {
       untested.push(node.key)
       if (quality.untestedPolicy === 'include') return true
     }
-    if (reason) reasons[reason] = (reasons[reason] ?? 0) + 1
+    if (reason) {
+      reasons[reason] = (reasons[reason] ?? 0) + 1
+      const missingPlatformOrRegion = reason === 'untested' && snapshot?.rows[node.key] &&
+        !qualityReason({ ...quality, exitRegions: [], platforms: [], aiPlatforms: [] }, snapshot.rows[node.key], snapshot.config)
+      removed.push({ node, reason, stage: reason === 'region' || reason === 'platform' || missingPlatformOrRegion ? 'regionAi' : 'performance' })
+    }
     return !reason
   }) : candidates
   const emptied = Boolean(quality && candidates.length && !passed.length)
-  const fallback = emptied && !!quality?.fallbackWhenEmpty
-  return { ...filter, matches: fallback ? candidates : passed, candidates, passed, reasons, untested, emptied, fallback }
+  let selected = passed
+  if (emptied && quality?.relaxWhenEmpty) {
+    const relaxed = { ...quality, maxLatencyMs: undefined, minUnlockLevel: 1 as const }
+    selected = candidates.filter(node => {
+      const reason = qualityReason(relaxed, snapshot?.rows[node.key], snapshot?.config, true)
+      return !reason || reason === 'untested' && quality.untestedPolicy === 'include'
+    })
+  }
+  const relaxed = emptied && !!selected.length
+  const fallback = emptied && !relaxed && !!quality?.fallbackWhenEmpty
+  if (fallback) selected = candidates
+  if (quality?.sortBy) {
+    const sort = quality.sortBy
+    selected = [...selected].sort((a, b) => compareQuality(snapshot?.rows[a.key], snapshot?.rows[b.key], sort,
+      quality.sortReverse, isSubscriptionNotice(a.name), isSubscriptionNotice(b.name)))
+  }
+  const matches = quality?.topN ? selected.slice(0, quality.topN) : selected
+  for (const node of selected.slice(matches.length)) removed.push({ node, reason: 'limit', stage: 'limit' })
+  const stageCounts = { source: sourceNodes.length, name: candidates.length,
+    performance: candidates.length - removed.filter(r => r.stage === 'performance').length, regionAi: passed.length, limit: matches.length }
+  return { ...filter, matches, sourceNodes, candidates, passed, reasons, removed, untested, emptied, fallback, relaxed, stageCounts }
 }
 
 // An explicitly scoped pool loses missing sources. Losing its last source

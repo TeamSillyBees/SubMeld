@@ -1,4 +1,4 @@
-import type { QualitySnapshot } from './quality-snapshot.ts'
+import type { BaselinePolicy, QualitySnapshot } from './quality-snapshot.ts'
 import type { z } from 'zod'
 import type * as schema from '../server/schema.ts'
 
@@ -13,6 +13,7 @@ export type Rule = z.output<typeof schema.rule>
 export type Base = z.output<typeof schema.draft>['base']
 
 export interface Draft {
+  qualityBaselinePolicy?: BaselinePolicy
   sources: Source[]
   groups: Group[]
   services: Service[]
@@ -201,6 +202,7 @@ export interface VersionSummary {
   seq: number
   at: string
   qualityReportId?: string | null
+  qualityDeviceId?: string | null
   kind: 'publish' | 'auto' | 'rollback'
   parent: number | null
   counts: Counts
@@ -246,6 +248,7 @@ export interface UpdateLog {
 }
 
 export interface Profile {
+  fixedQualitySnapshot?: QualitySnapshot
   id: string
   title: string
   draft: Draft

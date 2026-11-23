@@ -56,17 +56,18 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     let jobId = ''
     const secret = randomBytes(32).toString('base64url')
     const worker = randomBytes(32).toString('base64url')
+    const capabilities = { agentVersion: '1.3.0', mihomoVersion: 'v1.19', protocolVersion: 2, ipStack: 'dual', localRegion: 'JP', localIsp: 'Test ISP' }
     const post = (action: string, bearer: string, body: object) => page.request.post(base + '/api/quality/agent/' + action, {
-      headers: { Authorization: 'Bearer ' + bearer }, data: { profileId, jobId, ...body },
+      headers: { Authorization: 'Bearer ' + bearer }, data: { profileId, jobId, ...(['enroll', 'poll'].includes(action) && { capabilities }), ...body },
     })
     expect((await post('enroll', ticket, { secret, name: 'Desk PC', platform: 'windows' })).ok()).toBe(true)
     const device = (await (await page.request.get(base + '/api/quality/devices')).json())[0]
-    await expect(dialog.getByLabel('执行探针').locator('option', { hasText: 'Desk PC' })).toHaveCount(1, { timeout: 15000 })
+    await expect(dialog.getByRole('radio', { name: 'Desk PC' })).toBeChecked({ timeout: 15000 })
     const secondInvite = await (await page.request.post(base + '/api/quality/invite', { data: {} })).json() as DevicePairing
     const secondSecret = randomBytes(32).toString('base64url')
     expect((await post('enroll', secondInvite.pairing.split('.').at(-1)!, { name: 'Lab PC', platform: 'linux', secret: secondSecret })).ok()).toBe(true)
     const second = (await (await page.request.get(base + '/api/quality/devices')).json()).find((d: { name: string }) => d.name === 'Lab PC')
-    await dialog.getByLabel('执行探针').selectOption(device.id)
+    await dialog.getByRole('radio', { name: 'Desk PC' }).check()
     await dialog.locator('.workspace-dialog-body').evaluate(el => { el.scrollTop = 0 })
     await capture('target-mobile')
     const created = page.waitForResponse(r => r.url().includes('/api/quality/queue'))
@@ -140,7 +141,7 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     await dialog.getByRole('switch', { name: 'AI 平台检测' }).click()
     // This dialog was reopened while the first job ran. New jobs default to no bandwidth test.
     await expect(dialog.getByRole('switch', { name: '下载测速' })).not.toBeChecked()
-    await dialog.getByLabel('执行探针').selectOption(device.id)
+    await dialog.getByRole('radio', { name: 'Desk PC' }).check()
     await page.route('**/api/quality/queue*', route => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ message: '测试范围已更新。' }) }), { times: 1 })
     await dialog.getByRole('button', { name: '创建检测任务' }).click()
     await expect(dialog.getByText('测试范围已更新。')).toBeVisible()
@@ -157,8 +158,7 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     await expect(dialog.getByLabel('对比 AI 平台')).toHaveCount(0)
     await capture('latency-only-desktop')
     await dialog.getByRole('button', { name: '新建检测' }).click()
-    await expect(dialog.getByRole('button', { name: '创建检测任务' })).toBeDisabled()
-    await dialog.getByLabel('执行探针').selectOption(device.id)
+    await expect(dialog.getByRole('radio', { name: 'Desk PC' })).toBeChecked()
     await dialog.getByRole('button', { name: '创建检测任务' }).click()
     await dialog.getByRole('button', { name: '取消任务' }).click()
     await expect(dialog.getByText('已取消', { exact: true })).toBeVisible()
@@ -169,7 +169,12 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     expect((await post('poll', secret, { worker })).status()).toBe(403)
     await dialog.getByRole('button', { name: '关闭', exact: true }).click()
     await page.getByLabel('基准质量报告').selectOption(queued.id)
-    await page.getByLabel('节点质量排序').selectOption('loss')
+    await expect.poll(() => app.workspace.state().draft.qualityBaselinePolicy).toEqual({ mode: 'fixed', reportId: queued.id })
+    await page.reload()
+    await expect(page.getByLabel('基准质量报告')).toHaveValue(queued.id)
+    await page.getByRole('button', { name: '丢包率', exact: true }).click()
+    await page.getByRole('button', { name: '丢包率，当前升序' }).click()
+    await expect(page.getByRole('button', { name: '丢包率，当前降序' })).toHaveAttribute('aria-pressed', 'true')
     await page.getByLabel('节点质量筛选').selectOption('lowLatency')
     await expect(page.getByRole('checkbox', { name: '选择节点 东京 001' })).toBeVisible()
     await capture('nodes-desktop')
@@ -179,9 +184,16 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     await expect.poll(() => app.workspace.state().draft.groups.some(g => g.name.includes('低延迟'))).toBe(true)
     const group = app.workspace.state().draft.groups.find(g => g.name.includes('低延迟'))!
     await page.goto(base + '/#/groups/' + group.id)
-    await page.getByRole('button', { name: '流畅视频', exact: true }).click()
-    await expect(page.getByText('带宽不足 205')).toBeVisible()
+    await page.getByRole('button', { name: '低延迟高速', exact: true }).click()
+    await expect(page.getByText('匹配 10 个保留节点', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: /最终输出 10，查看淘汰原因/ }).click()
+    await expect(page.getByRole('heading', { name: '最终输出的淘汰原因' })).toBeVisible()
+    await page.keyboard.press('Escape')
     await page.getByRole('button', { name: '自定义阈值与兜底' }).click()
+    await page.getByLabel('最大 HTTPS 延迟（ms）', { exact: true }).fill('')
+    await page.getByLabel('最多保留节点数').fill('')
+    await page.getByLabel('最低带宽（Mbps）', { exact: true }).fill('20')
+    await expect(page.getByText('带宽不足 205')).toBeVisible()
     await page.getByRole('switch', { name: '筛空时恢复基础候选' }).click()
     await expect(page.getByText(/兜底恢复 205 个节点/)).toBeVisible()
     let finishRead!: () => void
@@ -198,7 +210,9 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     await expect(page.getByText('质量报告读取失败。')).toBeVisible()
     await expect(page.getByRole('button', { name: /补测 .* 个节点/ })).toHaveCount(0)
     await page.getByRole('button', { name: '重新读取报告' }).click()
-    const supplement = page.getByRole('button', { name: /补测 .* 个节点/ })
+    await expect(page.getByText('当前基准报告未检测带宽，已跳过对应条件。')).toBeVisible()
+    await expect(page.getByText('匹配 1 个保留节点', { exact: true })).toBeVisible()
+    const supplement = page.getByRole('button', { name: '补测 204 个节点' })
     await expect(supplement).toBeVisible()
     await page.getByRole('button', { name: '自定义阈值与兜底' }).click()
     await page.locator('.pool-quality').evaluate(el => window.scrollBy(0, el.getBoundingClientRect().top - 70))
@@ -208,7 +222,7 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     await capture('pool-desktop')
     await supplement.click()
     await expect(dialog.getByRole('switch', { name: '下载测速' })).toBeChecked()
-    await expect(dialog.getByLabel('执行探针')).toHaveValue('')
+    await expect(dialog.getByRole('button', { name: '创建检测任务' })).toBeDisabled()
 
   } finally { await app.close(); await rm(dir, { recursive: true, force: true }) }
 })

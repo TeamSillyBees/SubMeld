@@ -5,6 +5,7 @@ import { once } from 'node:events'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import http from 'node:http'
+import dns from 'node:dns/promises'
 import https from 'node:https'
 import net, { type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -52,6 +53,8 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
       const url = new URL(req.url!, 'https://fixture.invalid')
       if (url.pathname === '/latency') { counts.sample++; res.writeHead(204).end() }
       else if (url.pathname === '/exit') res.end('ip=' + ip + '\nloc=JP\n')
+      else if (url.pathname === '/empty-exit') res.writeHead(503).end()
+      else if (url.pathname === '/fallback-exit') res.end(JSON.stringify({ ip, country: 'JP' }))
       else if (url.pathname === '/download') { counts.downloads++; res.end(Buffer.alloc(Number(url.searchParams.get('bytes')))) }
       else {
         const timer = setInterval(() => { res.write(Buffer.alloc(256)) }, 100)
@@ -108,8 +111,12 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
   assert.ok(stages.some(p => p.stage === 'ai' && p.total === 2))
   const down = { ...nodes[1], connection: { ...nodes[1].connection, username: 'down' } }
   const invalid = { ...nodes[2], connection: { type: 'ss', server: '127.0.0.1', port, cipher: 'invalid-cipher', password: 'fixture' } }
-  const small = await run({ ...job, nodes: [nodes[0], down, invalid], config: { ...configBase, ai: false, bandwidth: true } },
-    binary, AbortSignal.timeout(20_000), () => {}, endpoints)
+  // Only the preflight resolver knows this name. The child must use its temporary hosts entry.
+  const ddns = { ...nodes[0], connection: { ...nodes[0].connection, server: 'entry-probe.invalid' } }
+  t.mock.method(dns, 'lookup', async () => [{ address: '127.0.0.2', family: 4 }, { address: '127.0.0.1', family: 4 }])
+  const small = await run({ ...job, nodes: [ddns, down, invalid], config: { ...configBase, ai: false, bandwidth: true } },
+    binary, AbortSignal.timeout(20_000), () => {}, { ...endpoints, exit: 'https://fixture.invalid/empty-exit', exitFallback: 'https://fixture.invalid/fallback-exit' })
+  assert.deepEqual(small.results[0].exit, { ip: '192.0.2.10', region: 'JP' })
   assert.equal(small.results[0].speed!.stop, 'bytes')
   assert.equal(small.results[0].speed!.bytes, 1024 ** 2)
   assert.equal(small.results[0].speed!.perSecondBps.length, 1)
@@ -117,8 +124,12 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
   assert.equal(small.results[1].speed, null)
   assert.equal(small.results[2].error, 'invalid_node')
   assert.equal(counts.downloads, 1)
+  const unknownExits = await run({ ...job, nodes: nodes.slice(0, 2) }, binary, AbortSignal.timeout(20_000), () => {},
+    { ...endpoints, exit: 'https://fixture.invalid/empty-exit', exitFallback: 'https://fixture.invalid/empty-exit' }, inspect)
+  assert.ok(unknownExits.results.every(row => row.available && row.exit === null && row.ai && !row.aiSkipped))
+  assert.equal(aiChecks, 4)
   let usedPort = 0
-  await withCore(binary, [nodes[0]], AbortSignal.timeout(15_000), async ([route], _, signal) => {
+  await withCore(binary, [nodes[0]], AbortSignal.timeout(45_000), async ([route], _, signal) => {
     usedPort = route.outlet.port
     const slow = await measureSpeed(route.outlet, configBase, signal, 'https://fixture.invalid/slow')
     assert.equal(slow.stop, 'duration')
@@ -128,7 +139,7 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
     const ai = await inspectPlatforms(route.outlet, 'JP', signal)
     assert.ok(surfaces.every(s => ai[s].state === 'network_error' && !ai[s].needsReview))
   })
-  assert.deepEqual([...aiHosts].sort(), ['android.chat.openai.com', 'api.anthropic.com', 'api.openai.com', 'claude.ai', 'gemini.google.com', 'grok.com'].map(h => h + ':443').sort())
+  assert.deepEqual([...aiHosts].sort(), ['android.chat.openai.com', 'api.anthropic.com', 'api.openai.com', 'chatgpt.com', 'claude.ai', 'gemini.google.com', 'grok.com'].map(h => h + ':443').sort())
   const reused = net.createServer()
   reused.listen(usedPort, '127.0.0.1')
   await once(reused, 'listening')

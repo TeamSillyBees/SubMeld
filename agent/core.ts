@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import type { QualityNode } from '../shared/quality.ts'
+import { entryHosts } from './preflight.ts'
 
 const exec = promisify(execFile)
 const protocols = new Set(['ss', 'ssr', 'vmess', 'vless', 'trojan', 'hysteria', 'hysteria2', 'tuic', 'http', 'socks5', 'wireguard', 'snell', 'anytls', 'ssh'])
@@ -93,7 +94,8 @@ async function withGroup<T>(binary: string, nodes: QualityNode[], signal: AbortS
       name: 'probe-' + i, type: 'http', listen: host, port: outlet.port, proxy: proxy(node).name,
       users: [{ username: 'probe', password }],
     }))
-    await writeFile(file, JSON.stringify({ ...base, proxies: usable.map(proxy), listeners }), { mode: 0o600 })
+    const hosts = await entryHosts(usable, active)
+    await writeFile(file, JSON.stringify({ ...base, hosts, proxies: usable.map(proxy), listeners }), { mode: 0o600 })
     await release(held)
     active.throwIfAborted()
     const child = spawn(binary, ['-d', home, '-f', file], { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })

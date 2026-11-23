@@ -1,6 +1,6 @@
 # SubMeld PC 探针
 
-把探针安装在经常开机的个人电脑上，即可从这台电脑测量订阅节点。同一方案可配对多台电脑，并为每台设置备注名。服务在开机后自动运行，空闲时每 15 秒向工作台查询任务，领取任务后才启动 Mihomo。
+把探针安装在经常开机的个人电脑上，即可从这台电脑测量订阅节点。同一方案可配对多台电脑，并为每台设置备注名。服务在开机后自动运行，空闲时通过最长 25 秒的 HTTP 长轮询等待派单。领取任务后启动 Mihomo。
 
 ## 安装和配对
 
@@ -20,7 +20,7 @@ sudo npm install --global ./submeld-quality-probe.tgz
 sudo submeld-probe install
 ```
 
-安装器提示时粘贴配对链接。链接有效期为 15 分钟，远程工作台使用 HTTPS，本机可用回环 HTTP。登记成功后，工作台显示电脑名称、在线状态和最近联系时间。此后即可关闭终端。
+安装器提示时粘贴配对链接。链接有效期为 15 分钟，远程工作台使用 HTTPS，本机可用回环 HTTP。探针会报告版本、Mihomo 版本、本机网卡的 IP 地址族，以及 IPinfo 返回的网络地区和运营商。此后即可关闭终端。
 
 安装器会校验官方 Mihomo 核心的 SHA-256，并把 Node.js、探针程序与平台依赖复制到系统服务目录。使用已有 Mihomo 时，可在安装命令的环境中设置 `SUBMELD_MIHOMO_BIN` 为可执行文件的绝对路径。Windows 使用固定版本的 WinSW 2.12.0 注册延迟自动启动的 `SubMeldProbe` 服务，以 LocalService 运行。Linux 启用 `submeld-probe.service`，由 systemd 分配专用运行身份。[Mihomo 发行版](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.34) · [WinSW 服务配置](https://github.com/winsw/winsw/blob/v2.12.0/doc/xmlConfigFile.md) · [systemd 运行环境](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html)
 
@@ -28,7 +28,7 @@ sudo submeld-probe install
 
 在「节点管理 → 质量检测」选择「已勾选」或「当前筛选」。筛选范围包括全部分页，单次最多 1,024 个节点。选择执行探针、采样轮数和可选的下载测速、AI 平台检测，再点击「创建检测任务」。开启下载测速时，面板会显示本批的下载流量上限。
 
-每台探针同时执行一个任务。等待期间可改派空闲在线探针或取消任务。离线期间新建的任务最多等待 24 小时。电脑恢复连接后自动领取，断网期间会逐步延长重试间隔，最长为 5 分钟。工作台显示检测进度、节点详情和可导出的 JSON 报告。运行中断后，两分钟没有进度的任务会标记为失败，需要重新创建才会再次消耗检测流量。
+每台在线且版本兼容的探针同时执行一个任务，最多另有 5 项排队。已入队的任务保留 24 小时，可以取消或改派。探针正常退出时主动通知工作台，失联 35 秒后显示离线。电脑恢复连接后继续领取排队任务。运行中断且两分钟没有进度的任务标记为失败。工作台提供检测进度、节点详情和 JSON 报告。
 
 每次检测使用独立的临时 Mihomo 工作目录，一个节点对应一个带随机口令的回环 HTTP 端口。探针通过绑定的出站发送请求。若日常客户端启用了系统级 TUN，外层连接仍受系统路由影响。需要使用特定网卡时，可在运行 `submeld-probe install` 的环境中设置 `SUBMELD_PROBE_INTERFACE` 为网卡名称，并核对客户端的路由规则。[Mihomo 监听器配置](https://wiki.metacubex.one/en/config/inbound/listeners/)
 
@@ -44,24 +44,24 @@ sudo submeld-probe install
 
 | 指标 | 测量方法 |
 | --- | --- |
-| 可用性与延迟 | 每个节点先做一次预热，再建立 2–8 次新连接到 Google 的 `generate_204`。任一正式采样取得预期的 HTTPS 204 即判可用。每次最长等待 6 秒。 |
+| 可用性与延迟 | 每个节点先预热一次，再建立 2–8 次新连接到 Google 的 `generate_204`。建连和 TLS 握手共用 6 秒预算，握手后另给响应 3 秒。任一正式采样取得 HTTPS 204 即判可用。 |
 | TLS RTT | 完成 HTTP CONNECT 后开始计时，到 TLS 握手成功为止。报告保存每轮数据及成功握手的中位数，单位为毫秒。 |
 | HTTPS 延迟 | 从建立本地代理连接到收到目标 204 响应头的耗时，汇总成功样本的中位数。 |
 | 抖动与丢包率 | 抖动取相邻成功 HTTPS 样本耗时差的绝对值均值。丢包率采用失败 HTTPS 请求数除以正式采样数。样本不足时相应指标为 `null`。 |
-| 出口 | 可用节点通过 Cloudflare trace 取得出口 IP 与两位地区代码。读取失败时保留已有延迟结果。 |
+| 出口 | 可用节点通过 Cloudflare trace 取得出口 IP 与两位地区代码。读取失败时经同一节点再查询一次 IPinfo。 |
 | 下载 | 在延迟阶段结束后，使用 1–2 路并发从 Cloudflare Speed Test 流式下载。读取响应正文达到字节上限或总耗时达到上限即关闭流。平均速度包含建连，最高速度取各时段速率的最大值，最后不足一秒按实际时长计算。 |
 | 流量 | `speed.bytes` 是已读取的下载正文。TLS 与代理协议开销、延迟采样、出口查询和 AI 探测会产生额外网络流量。 |
 
 ## AI 平台判定
 
-探针使用 Impit 的固定 Chrome TLS 配置访问公开入口。同批的每个出口 IP 优先选择延迟最低的合格节点检测一次，其余同出口节点复用结果。缺少出口、丢包率达到 50% 或 HTTPS 中位延迟达到 4 秒的节点跳过独立 AI 请求。流量和到期提示条目在启动核心前识别。每次最多并行检测两个出口，每个出口最多三个入口请求。结果记录响应状态、判定依据和 `needsReview`。[Impit 协议客户端](https://github.com/apify/impit)
+探针使用 Impit 访问公开入口。同批的每个出口 IP 优先选择延迟最低的合格节点检测一次，其余同出口节点复用结果。出口查询失败时，每条连接质量合格的隧道独立采集平台响应。丢包率达到 50% 或 HTTPS 中位延迟达到 4 秒的节点跳过独立 AI 请求。流量和到期提示条目在启动核心前识别。最多并行检测 6 个出口，每条隧道最多同时发出 2 个请求。连接重置和超时最多重试一次。[Impit 协议客户端](https://github.com/apify/impit)
 
-- **ChatGPT** Web 读取合规 Cookie 接口的 JSON，有地区字段时回填。App 根据入口响应中的 VPN、地区限制和加载失败提示判定。[OpenAI 网络域名说明](https://help.openai.com/en/articles/9247338-network-recommendations-for-chatgpt-errors-on-web-and-apps)
-- **Gemini** 访问英文入口，携带同意偏好 Cookie，从页面读取 Google 的地区标记。对于个人账号，Google 识别为中国大陆或俄罗斯时记为地区受限。这两个地区的出口收到 403 也记为地区受限，其他出口收到 403 记为不可用。地区标记缺失，或标记与出口不一致且无法据此确定地区限制时，保留复核提示。[Gemini 网页版支持地区](https://support.google.com/gemini/answer/13575153?hl=en)
+- **ChatGPT** 结合站点 trace、合规接口 JSON 和移动网关回应。移动端会识别机房限制、VPN 和加载失败提示。[ChatGPT 支持地区](https://help.openai.com/en/articles/7947663-chatgpt-supported-countries)
+- **Gemini** 从产品页读取 Google 的地区标记，按个人账号的支持地区判定。页面转向 Google 验证时标记为需要浏览器验证。Google 定位与通用出口地区不同时，详情保留两项观测。[Gemini 网页版支持地区](https://support.google.com/gemini/answer/13575153?hl=en)
 - **Claude** 分别检查 Web 首页与 Models API。API 返回缺少密钥的 401、Web 跳转到官方登录页时记为入口可达。官方地区不可用页记为地区受限。[Claude API 错误说明](https://platform.claude.com/docs/en/api/errors)
-- **Grok** 区分明确地区限制、Cloudflare 挑战、明确 IP 封禁、限频及未知拒绝。遇到挑战时记录该响应，保留人工复核标记。[Cloudflare 挑战响应](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/)
+- **Grok** 读取站点 trace，识别地区拒绝、浏览器验证、IP 封禁和限频。普通 403 缺少具体原因时保留待确认状态。[Cloudflare 挑战响应](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/)
 
-连接失败直接记录为网络错误。OpenAI、Claude 返回 403 且出口位于已知限制地区时记为地区受限。报告按出口 IP 去重，展示 AI 检测覆盖数、待复核数和待复核占全部出口的比例。若部分出口跳过 AI 检测，同时显示待复核占已测出口的比例。
+报告中的全入口可达、部分入口可达、需要浏览器验证、地区受限、封禁或连接失败分别计 3、2、1、0、−1 分。缺少明确证据时显示证据不足。节点排序和代理组筛选使用 0–3 四档等级，地区受限和连接失败均归入 0 档。
 
 「入口可达」表示本次请求观察到了产品入口。登录、账号资格和实际模型调用需要在对应产品中确认。
 

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { surfaces } from '../shared/quality-options.ts'
+import { platforms, qualitySorts } from '../shared/quality-snapshot.ts'
 import { qualityKey } from '../shared/quality.ts'
 import { regions } from '../shared/catalog.ts'
 import { compilePoolPattern, maxPatternLength } from '../shared/group-filter.ts'
@@ -38,6 +39,11 @@ const qualityCondition = z.strictObject({
   alive: z.boolean().optional(), maxLatencyMs: z.number().min(0).max(600000).optional(),
   maxLossRate: z.number().min(0).max(1).optional(), minBandwidthMbps: z.number().min(0).max(1000000).optional(),
   platforms: z.array(z.enum(surfaces)).max(surfaces.length).optional(),
+  exitRegions: z.array(z.string().regex(/^[A-Z]{2}$/)).max(250).optional(),
+  excludeExitRegions: z.boolean().optional(), maxJitterMs: z.number().min(0).max(600000).optional(),
+  aiPlatforms: z.array(z.enum(platforms)).max(platforms.length).optional(), minUnlockLevel: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
+  sortBy: z.enum(qualitySorts).optional(), sortReverse: z.boolean().optional(), topN: z.number().int().min(1).max(16000).optional(),
+  relaxWhenEmpty: z.boolean().optional(),
   untestedPolicy: z.enum(['include', 'exclude']).optional(), fallbackWhenEmpty: z.boolean().optional(),
 })
 const pool = z.object({
@@ -115,6 +121,10 @@ const base = z.object({
 })
 
 export const draft = z.object({
+  qualityBaselinePolicy: z.discriminatedUnion('mode', [
+    z.strictObject({ mode: z.literal('latest') }), z.strictObject({ mode: z.literal('device'), deviceId: z.uuid() }),
+    z.strictObject({ mode: z.literal('fixed'), reportId: z.uuid() }),
+  ]).optional(),
   sources: array(source), groups: array(group), services: array(service, 1000),
   rules: array(rule, 15000), base,
 }).superRefine((value, ctx) => {

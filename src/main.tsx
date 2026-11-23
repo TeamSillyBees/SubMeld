@@ -415,7 +415,7 @@ function App() {
     Object.values(state.sources).map(record => record.nodesVersion),
     Object.values(state.providers).map(record => record.good),
   ])
-  const quality = useQualityBaseline(state?.id, call, state?.current?.qualityReportId)
+  const quality = useQualityBaseline(state, call, save)
   const view = useMemo(() => state ? projection(state.draft, state, quality.snapshot) : null, [state?.draft, datasetVersions, quality.snapshot])
   if (!session) return <Loading error={sessionError} retry={loadSession}>正在连接服务端…</Loading>
   if (!session.authenticated) return <SignIn session={session} onDone={next => { setSessionError(''); setSession(next) }} />

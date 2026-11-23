@@ -28,11 +28,11 @@ interface Requests {
   'quality/cancel': { id: string }
   probe: { kind: 'source'; id: string; url?: string; input?: LocalInput } | ({ kind: 'provider'; id: string } & Provider)
   draft: { revision: number; draft: Draft; localInputs?: Record<string, LocalInput>; localNodes?: Record<string, Connection[]> }
-  check: { qualityReportId?: string | null }
+  check: { qualityReportId?: string | null; expectedQualityReportId?: string | null }
   match: { domain: string; qualityReportId?: string | null; draft?: Draft; serviceId?: string }
   candidate: { id: string; accept: boolean }
   refresh: { id?: string; kind?: EntryKind }
-  publish: { revision: number; qualityReportId?: string | null }
+  publish: { revision: number; qualityReportId?: string | null; expectedQualityReportId?: string | null }
   rollback: { seq: number }
   link: { action: 'rotate' | 'revoke' } | undefined
   profiles: { action: 'create' | 'clone' | 'rename' | 'delete'; title?: string }

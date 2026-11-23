@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { Assignment, Progress } from '../shared/quality.ts'
+import { probePollMs } from '../shared/quality-options.ts'
 import { run } from './run.ts'
 
 export class AgentHttpError extends Error { status = 0 }
@@ -11,7 +12,7 @@ export async function post(origin: string, action: string, token: string, conten
     try {
       const res = await fetch(origin + '/api/quality/agent/' + action, { method: 'POST', redirect: 'error',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-        body: JSON.stringify(content), signal: AbortSignal.any([active, AbortSignal.timeout(12_000)]) })
+        body: JSON.stringify(content), signal: AbortSignal.any([active, AbortSignal.timeout(action === 'poll' ? probePollMs + 10_000 : 12_000)]) })
       if (!res.ok) {
         await res.body?.cancel()
         const message = res.status === 403 ? '电脑配对或任务凭据已失效。' : res.status === 409 ? '任务已被取消或结束。' : '服务端返回 HTTP ' + res.status + '。'

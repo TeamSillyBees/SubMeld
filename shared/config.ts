@@ -178,7 +178,7 @@ function checkGroups(draft: Draft, rows: FilteredNode[], issue: ReportIssue, qua
         if (filter.includeError || filter.excludeError) addIssue('group-filter', filter.includeError ? '包含正则：' + filter.includeError : '排除正则：' + filter.excludeError)
         else {
           if (filter.emptied && group.enabled) issue('warning', 'groups', group.id, 'pool-quality-empty',
-            '「' + group.name + '」的质量条件排除了全部 ' + filter.candidates.length + ' 个候选节点。' + (filter.fallback ? '已按来源、地区和名称条件兜底。' : '请调整阈值或补测节点。'))
+            '「' + group.name + '」的质量条件排除了全部 ' + filter.candidates.length + ' 个候选节点。' + (filter.relaxed ? '已放宽条件并恢复 ' + filter.matches.length + ' 个节点。' : filter.fallback ? '已按来源、地区和名称条件兜底。' : '请调整阈值或补测节点。'))
           for (const row of filter.matches) add(row.key, row.name, 'node')
         }
       }

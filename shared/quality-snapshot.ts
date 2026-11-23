@@ -1,11 +1,28 @@
-import type { QualityReport } from './quality.ts'
-import type { Surface } from './quality-options.ts'
+import type { AiReading, AiResults, QualityJob, QualityReport } from './quality.ts'
+import { isSubscriptionNotice, surfaces, type Surface } from './quality-options.ts'
 
 export const platformSurfaces = {
   ChatGPT: ['chatgptWeb', 'chatgptApp'], Gemini: ['gemini'], Claude: ['claudeWeb', 'claudeApi'], Grok: ['grok'],
 } as const satisfies Record<string, readonly Surface[]>
-export type Platform = keyof typeof platformSurfaces
-export type QualitySort = 'https' | 'tls' | 'loss' | 'speed' | 'ai' | Platform
+export const platforms = ['ChatGPT', 'Gemini', 'Claude', 'Grok'] as const
+export type Platform = typeof platforms[number]
+export const qualitySorts = ['https', 'tls', 'loss', 'jitter', 'speed', 'ai', ...platforms] as const
+export type QualitySort = typeof qualitySorts[number]
+export const verdictScores = { unlocked: 3, partial_unlock: 2, degraded_challenge: 1, region_restricted: 0, blocked_or_unreachable: -1 } as const
+export type Verdict = keyof typeof verdictScores
+export const verdictLabels: Record<Verdict, string> = {
+  unlocked: '全入口可达', partial_unlock: '部分入口可达', degraded_challenge: '需浏览器验证', region_restricted: '地区受限', blocked_or_unreachable: '封禁或连接失败',
+}
+type PlatformResults = Record<Platform, Verdict | null>
+
+export type BaselinePolicy = { mode: 'latest' } | { mode: 'device'; deviceId: string } | { mode: 'fixed'; reportId: string }
+export function baselineId(policy: BaselinePolicy | undefined, jobs: QualityJob[], published?: { qualityReportId?: string | null; qualityDeviceId?: string | null } | null) {
+  if (policy?.mode === 'fixed') return policy.reportId
+  const device = policy?.mode === 'device' ? policy.deviceId : null
+  const latest = jobs.filter(j => j.status === 'completed' && (!device || device === j.targetDeviceId))
+    .sort((a, b) => (b.finishedAt ?? '').localeCompare(a.finishedAt ?? '') || b.id.localeCompare(a.id))[0]
+  return latest?.id ?? ((!device || device === published?.qualityDeviceId) ? published?.qualityReportId ?? null : null)
+}
 
 export interface NodeQuality {
   available: boolean
@@ -15,37 +32,84 @@ export interface NodeQuality {
   speedMbps: number | null
   speedFailed: boolean
   reachable: Surface[] | null
+  // Published snapshots from earlier releases contain only the fields above.
+  jitterMs?: number | null
+  exitRegion?: string | null
+  ipStack?: 'ipv4' | 'ipv6' | null
+  infoNode?: boolean
+  platforms?: PlatformResults | null
+  surfaceIssues?: Partial<Record<Surface, AiReading['state']>>
 }
-export interface QualitySnapshot { reportId: string; rows: Record<string, NodeQuality> }
+export interface QualitySnapshot {
+  reportId: string; rows: Record<string, NodeQuality>
+  config?: { bandwidth: boolean; ai: boolean }
+  targetDeviceName?: string | null; targetDeviceId?: string | null
+}
+
+const reached = (r: AiReading) => r.state === 'reachable' && !r.needsReview
+export function platformVerdict(ai: AiResults, platform: Platform): Verdict | null {
+  const readings = platformSurfaces[platform].map(s => ai[s])
+  if (readings.every(reached)) return 'unlocked'
+  if (readings.some(r => r.state === 'degraded_challenge')) return 'degraded_challenge'
+  if (readings.some(reached)) return 'partial_unlock'
+  if (readings.some(r => r.needsReview)) return null
+  if (readings.some(r => r.state === 'region_restricted')) return 'region_restricted'
+  return 'blocked_or_unreachable'
+}
 export function qualitySnapshot(report: QualityReport): QualitySnapshot {
   const rows: QualitySnapshot['rows'] = {}
   for (const r of report.results) {
     const speedFailed = r.speed?.stop === 'error' || Boolean(r.speed && !r.speed.bytes)
+    const failed = r.ai ? surfaces.filter(s => !reached(r.ai![s])) : []
     rows[r.key] = {
-      available: r.available, httpsMs: r.httpsMedianMs, tlsMs: r.tlsMedianMs, lossRate: r.lossRate,
+      available: r.available, httpsMs: r.httpsMedianMs, tlsMs: r.tlsMedianMs, lossRate: r.lossRate, jitterMs: r.jitterMs,
+      exitRegion: r.exit?.region ?? null, ipStack: r.exit ? (r.exit.ip.includes(':') ? 'ipv6' : 'ipv4') : null,
+      infoNode: r.error === 'info_node' || isSubscriptionNotice(r.name),
       speedMbps: r.speed && !speedFailed ? r.speed.averageBps * 8 / 1_000_000 : null, speedFailed,
-      reachable: r.ai ? (Object.keys(r.ai) as Surface[]).filter(key => r.ai![key].state === 'reachable' && !r.ai![key].needsReview) : null,
+      reachable: r.ai ? surfaces.filter(s => reached(r.ai![s])) : null,
+      ...(failed.length > 0 && { surfaceIssues: Object.fromEntries(failed.map(s => [s, r.ai![s].state === 'reachable' ? 'unknown' : r.ai![s].state])) }),
+      platforms: r.ai ? Object.fromEntries(platforms.map(p => [p, platformVerdict(r.ai!, p)])) as PlatformResults : null,
     }
   }
-  return { reportId: report.jobId, rows }
+  return { reportId: report.jobId, targetDeviceId: report.targetDeviceId ?? null, targetDeviceName: report.targetDeviceName ?? null,
+    config: { bandwidth: report.config.bandwidth, ai: report.config.ai }, rows }
 }
-
+export function verdictFor(row: NodeQuality, platform: Platform): Verdict | null {
+  if (row.platforms !== undefined) return row.platforms?.[platform] ?? null
+  const channels = platformSurfaces[platform]
+  const count = channels.filter(s => row.reachable?.includes(s)).length
+  return count === channels.length ? 'unlocked' : count ? 'partial_unlock' : null
+}
 export function qualityValue(row: NodeQuality, sort: QualitySort): number | null {
   if (sort === 'https') return row.httpsMs
   if (sort === 'tls') return row.tlsMs
   if (sort === 'loss') return row.lossRate
+  if (sort === 'jitter') return row.jitterMs ?? null
   if (sort === 'speed') return row.speedMbps
-  if (!row.reachable) return null
-  const score = (channels: readonly Surface[]) => channels.filter(s => row.reachable!.includes(s)).length / channels.length
-  return sort === 'ai' ? Object.values(platformSurfaces).reduce((total, channels) => total + score(channels), 0) : score(platformSurfaces[sort])
+  if (sort === 'ai') {
+    const scores = platforms.flatMap(p => qualityValue(row, p) ?? [])
+    return scores.length ? scores.reduce((sum, n) => sum + n, 0) : null
+  }
+  const verdict = verdictFor(row, sort)
+  // Both failure verdicts occupy the lowest of the four sorting and filtering levels.
+  return verdict === null ? null : Math.max(0, verdictScores[verdict])
 }
-export function compareQuality(a: NodeQuality | undefined, b: NodeQuality | undefined, sort: QualitySort) {
-  const rank = (r?: NodeQuality) => !r ? 3 : !r.available ? 2 : qualityValue(r, sort) === null ? 1 : 0
-  const priority = rank(a) - rank(b)
-  if (priority || !a?.available || !b?.available) return priority
-  const av = qualityValue(a, sort), bv = qualityValue(b, sort)
-  if (av === null || bv === null) return 0
-  const value = sort === 'https' || sort === 'tls' || sort === 'loss' ? av - bv : bv - av
-  if (value || sort !== 'loss') return value
-  return (a.httpsMs ?? Number.MAX_VALUE) - (b.httpsMs ?? Number.MAX_VALUE)
+
+export const higherFirst = (sort: QualitySort) => sort === 'speed' || sort === 'ai' || Object.hasOwn(platformSurfaces, sort)
+function metric(a: number | null | undefined, b: number | null | undefined, descending = false) {
+  if (a == null || b == null) return Number(a == null) - Number(b == null)
+  return descending ? b - a : a - b
+}
+const fullCount = (r: NodeQuality) => platforms.filter(p => verdictFor(r, p) === 'unlocked').length
+export function compareQuality(a: NodeQuality | undefined, b: NodeQuality | undefined, sort: QualitySort, reverse = false, aNotice = false, bNotice = false) {
+  const rank = (r: NodeQuality | undefined, notice: boolean) => notice || r?.infoNode ? 4 : !r ? 2 : !r.available ? 3 : qualityValue(r, sort) === null ? 1 : 0
+  const ar = rank(a, aNotice), br = rank(b, bNotice)
+  if (ar || br || !a || !b) return ar - br
+  const primary = metric(qualityValue(a, sort), qualityValue(b, sort), higherFirst(sort) !== reverse)
+  if (primary) return primary
+  const loss = metric(a.lossRate, b.lossRate), jitter = metric(a.jitterMs, b.jitterMs), latency = metric(a.httpsMs, b.httpsMs)
+  if (sort === 'https' || sort === 'tls') return loss || jitter
+  if (sort === 'loss') return jitter || latency
+  if (sort === 'jitter' || sort === 'speed') return loss || latency
+  return (sort === 'ai' ? fullCount(b) - fullCount(a) : metric(qualityValue(a, 'ai'), qualityValue(b, 'ai'), true)) || loss || latency
 }

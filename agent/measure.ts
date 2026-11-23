@@ -6,12 +6,13 @@ import { once } from 'node:events'
 import type { LatencySample, QualityConfig, QualityRow, SpeedReading } from '../shared/quality.ts'
 import type { Outlet } from './core.ts'
 
-export const targets = {
+export interface Targets { latency: string; exit: string; exitFallback?: string; download: string }
+export const targets: Targets = {
   latency: 'https://www.gstatic.com/generate_204',
   exit: 'https://www.cloudflare.com/cdn-cgi/trace',
+  exitFallback: 'https://ipinfo.io/json',
   download: 'https://speed.cloudflare.com/__down',
 }
-export type Targets = typeof targets
 const round = (value: number) => Math.round(value * 10) / 10
 
 async function viaOutlet<T>(outlet: Outlet, target: string, signal: AbortSignal,
@@ -49,11 +50,18 @@ async function viaOutlet<T>(outlet: Outlet, target: string, signal: AbortSignal,
 async function sample(outlet: Outlet, signal: AbortSignal, target: string): Promise<LatencySample> {
   const start = performance.now()
   let tlsMs: number | null = null
+  const budget = new AbortController()
+  let deadline = setTimeout(() => budget.abort(), 6000)
   try {
-    const httpsMs = await viaOutlet(outlet, target, AbortSignal.any([signal, AbortSignal.timeout(6000)]),
-      res => res.statusCode === 204 ? round(performance.now() - start) : null, value => { tlsMs = value })
+    const httpsMs = await viaOutlet(outlet, target, AbortSignal.any([signal, budget.signal]),
+      res => res.statusCode === 204 ? round(performance.now() - start) : null, value => {
+        tlsMs = value
+        clearTimeout(deadline)
+        deadline = setTimeout(() => budget.abort(), 3000)
+      })
     return { tlsMs, httpsMs }
   } catch { signal.throwIfAborted(); return { tlsMs, httpsMs: null } }
+  finally { clearTimeout(deadline) }
 }
 function median(values: number[]) {
   if (!values.length) return null
@@ -82,8 +90,10 @@ async function readExit(outlet: Outlet, signal: AbortSignal, target: string): Pr
         parts.push(chunk)
       }
       const trace = Buffer.concat(parts).toString()
-      const ip = /^ip=(\S+)\s*$/m.exec(trace)?.[1]
-      const region = /^loc=([A-Z]{2})\s*$/m.exec(trace)?.[1] ?? null
+      const data = trace.trimStart().startsWith('{') ? JSON.parse(trace) : null
+      const ip = data?.ip ?? /^ip=(\S+)\s*$/m.exec(trace)?.[1]
+      const code = data?.country ?? /^loc=([A-Z]{2})\s*$/m.exec(trace)?.[1]
+      const region = typeof code === 'string' && /^[A-Z]{2}$/.test(code) ? code : null
       if (!ip || !isIP(ip)) return null
       return { ip: isIP(ip) === 6 ? new URL('http://[' + ip + ']').hostname.slice(1, -1) : ip, region }
     })
@@ -95,8 +105,10 @@ export async function measureLatency(key: string, outlet: Outlet, config: Qualit
   const samples: LatencySample[] = []
   for (let i = 0; i < config.rounds; i++) samples.push(await sample(outlet, signal, endpoints.latency))
   const metrics = summarize(samples)
+  let exit = metrics.available ? await readExit(outlet, signal, endpoints.exit) : null
+  if (metrics.available && !exit && endpoints.exitFallback) exit = await readExit(outlet, signal, endpoints.exitFallback)
   return { key, samples, ...metrics, error: metrics.available ? null : 'no_response',
-    exit: metrics.available ? await readExit(outlet, signal, endpoints.exit) : null, speed: null, ai: null }
+    exit, speed: null, ai: null }
 }
 
 export async function measureSpeed(outlet: Outlet, config: QualityConfig, signal: AbortSignal, target = targets.download): Promise<SpeedReading> {

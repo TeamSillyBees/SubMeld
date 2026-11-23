@@ -8,10 +8,11 @@ import { QualityControl } from './quality.tsx'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
-import { commonKeywords, defaultFilter, regionLabel, regions } from '../shared/catalog.ts'
+import { commonKeywords, defaultFilter, identifyRegion, regionLabel, regions } from '../shared/catalog.ts'
 import { draftDataset, filterNodes, sourceReferences } from '../shared/config.ts'
 import { QualityBaselinePicker } from './quality-baseline.tsx'
-import { NodeQualityValue, qualitySortLabels } from './node-quality.tsx'
+import { NodeQualityValue, QualitySortBar, qualitySortLabels, SkippedQualityNotice } from './node-quality.tsx'
+import { isSubscriptionNotice } from '../shared/quality-options.ts'
 import { compareQuality, type QualitySort } from '../shared/quality-snapshot.ts'
 import { membersForSources, poolCondition, qualityPresets, qualityReason } from '../shared/group-filter.ts'
 import { calendarFormatter, renewalNoticeDays } from '../shared/subscription.ts'
@@ -613,7 +614,9 @@ export function NodesPage() {
   const [sort, setSort] = useSearchValue('sort')
   const [presetId, setPreset] = useSearchValue('quality')
   const preset = Object.hasOwn(qualityPresets, presetId) ? qualityPresets[presetId] : undefined
-  const sortKey = Object.hasOwn(qualitySortLabels, sort) ? sort as QualitySort : null
+  const reverse = sort.startsWith('-')
+  const key = reverse ? sort.slice(1) : sort
+  const sortKey = Object.hasOwn(qualitySortLabels, key) ? key as QualitySort : null
   const readings = quality.snapshot?.rows
   const awaitingQuality = Boolean(preset || sortKey) && !quality.ready
   const focusNode = view.nodes.find(row => row.sourceId === route.id && row.id === route.detail)
@@ -637,10 +640,10 @@ export function NodesPage() {
       setAreas('')
     }
   }, [route.id, route.detail])
-  const nodes = view.nodes.filter(row => (!preset || !qualityReason(preset.condition, readings?.[row.key])) && (!source || source === row.sourceId) && (!areas.length || areas.includes(row.region))
+  const nodes = view.nodes.filter(row => (!preset || !qualityReason(preset.condition, readings?.[row.key], quality.snapshot?.config)) && (!source || source === row.sourceId) && (!areas.length || areas.includes(row.region))
     && (searchable(row.name, query) || searchable(row.originalName, query) || searchable(state.notes[row.key]?.note, query))
     && (status === 'all' || status === 'kept' && row.kept || status === 'excluded' && !row.kept || status === 'conflicts' && row.collision || status === 'favorites' && state.notes[row.key]?.favorite))
-  if (sortKey) nodes.sort((a, b) => compareQuality(readings?.[a.key], readings?.[b.key], sortKey))
+  if (sortKey) nodes.sort((a, b) => compareQuality(readings?.[a.key], readings?.[b.key], sortKey, reverse, isSubscriptionNotice(a.originalName), isSubscriptionNotice(b.originalName)))
   const [offset, setOffset] = useListPage(nodes.length)
   useEffect(() => {
     if (!route.detail) return
@@ -697,7 +700,8 @@ export function NodesPage() {
     const filteredKeys = status === 'favorites' || status === 'conflicts' ? view.nodes.filter(n =>
       status === 'favorites' ? state.notes[n.key]?.favorite : n.collision).map(n => n.key) : undefined
     const noteMatches = query.trim() ? view.nodes.filter(n => searchable(state.notes[n.key]?.note, query)).map(n => n.key) : []
-    const pool = poolCondition({ sourceIds: source ? [source] : [], regions: areas, quality: preset?.condition,
+    const pool = poolCondition({ sourceIds: source ? [source] : [], regions: areas,
+      quality: sortKey ? { ...preset?.condition, sortBy: sortKey, sortReverse: reverse } : preset?.condition,
       search: query.trim(), nodeKeys: filteredKeys, noteMatches: noteMatches.length ? noteMatches : undefined })
     const base = (activeSource?.name || '节点').slice(0, 230) + ' · ' + (preset?.name || '筛选池')
     const taken = new Set([...state.draft.groups.map(g => g.name), ...view.nodes.map(n => n.name)])
@@ -726,10 +730,9 @@ export function NodesPage() {
     <div className="node-quality-bar"><div className="quality-baseline"><strong>质量基准</strong><QualityBaselinePicker /></div>
       <div className="actions"><NativeSelect aria-label="节点质量筛选" value={preset?.name ? presetId : ''} onChange={e => { setPreset(e.target.value); setOffset(0); setSelected([]) }}>
         <NativeSelectOption value="">不限质量</NativeSelectOption>{Object.entries(qualityPresets).map(([id, p]) => <NativeSelectOption key={id} value={id}>{p.name}</NativeSelectOption>)}
-      </NativeSelect><NativeSelect aria-label="节点质量排序" value={sortKey ?? ''} onChange={e => { setSort(e.target.value); setOffset(0) }}>
-        <NativeSelectOption value="">默认顺序</NativeSelectOption>{Object.entries(qualitySortLabels).map(([id, name]) => <NativeSelectOption key={id} value={id}>{name}{id === 'speed' || id === 'ai' ? '从高到低' : ['tls','https','loss'].includes(id) ? '从低到高' : '优先'}</NativeSelectOption>)}
       </NativeSelect><Button size="small" icon={Plus} disabled={busy || awaitingQuality || !nodes.some(n => n.kept)} onClick={savePool}>保存为代理组筛选池</Button></div>
     </div>
+    <SkippedQualityNotice condition={preset?.condition} config={quality.snapshot?.config} />
     {quality.ready && state.current && quality.reportId && quality.reportId !== state.current.qualityReportId && state.draft.groups.some(g => g.enabled && g.members.some(m => m.kind === 'pool' && m.quality)) && <div className="actions field-note">质量基准已更新。<ButtonLink size="small" page="publish">预览代理组差异</ButtonLink></div>}
     {activeSource && <SourcePolicy key={activeSource.id} source={activeSource} busy={busy} saveFilter={saveFilter} />}
     <Panel className="node-detail" title={<>节点明细 <span className="soft-count">共 {formatNumber(raw)}</span> <Badge tone="success">保留 {formatNumber(retained)}</Badge> <Badge>排除 {formatNumber(excluded)}</Badge>
@@ -740,6 +743,7 @@ export function NodesPage() {
         <SearchBox placeholder="搜索节点名或备注" value={query} onChange={value => { setQuery(value); setOffset(0) }} />
         <MultiSelect label="地区筛选" options={regionOptions} values={areas} onChange={value => { setAreas(value.join(',')); setOffset(0) }} placeholder="全部地区" />
       </div>}>
+      {(quality.reportId || sortKey) && <QualitySortBar sort={sortKey} reverse={reverse} change={value => { setSort(value); setOffset(0) }} />}
       {status === 'conflicts' && nodes.length > 0 && <p className="panel-padding warning-text field-note">可修改名称前缀或排除重名节点。选择「全部订阅源」可查看跨来源的重名节点。</p>}
       {!!selected.length && <div className="batch-bar"><strong>已选 {selected.length} 个节点</strong>
         <Button size="small" onClick={() => setManual(selected, true)} busy={busy}>批量排除</Button>
@@ -754,11 +758,14 @@ export function NodesPage() {
             const comment = state.notes[row.key]
             const policy = state.draft.sources.find(entry => entry.id === row.sourceId)?.filter
             const manual = policy?.manual.includes(row.id)
+            const exit = readings?.[row.key]?.exitRegion
+            const marked = row.region === 'unknown' ? identifyRegion(row.originalName) : row.region
             return <TableRow key={row.key} className={cn(row.id === route.detail && 'row-highlight')}>
               <TableCell><Checkbox aria-label={'选择节点 ' + row.name} checked={selectedSet.has(row.key)} onCheckedChange={enabled => setSelected(enabled ? [...selected, row.key] : selected.filter(key => key !== row.key))} /></TableCell>
               <TableCell mobileLabel="状态"><Badge tone={row.kept ? 'success' : 'neutral'}>{row.kept ? '已保留' : '已排除'}</Badge></TableCell>
               <TableCell className="table-row-title"><strong className="node-final-name" translate="no" title={'原名 ' + row.originalName}>{row.name}</strong>
                 <div className="node-meta"><RouteLink page="sources" id={row.sourceId} detail="filter">{row.sourceName}</RouteLink><span>{regionLabel(row.region)}</span><code>{row.type.toUpperCase()}</code>
+                  {exit && exit !== marked && <Badge tone={marked === 'unknown' ? 'neutral' : 'warning'}>{marked !== 'unknown' && '标称 ' + marked + ' · '}实测 {exit}</Badge>}
                   {comment?.favorite && <Star aria-label="已收藏" />}</div>{comment?.note && <small className="muted">{comment.note}</small>}</TableCell>
               {(quality.reportId || sortKey) && <TableCell mobileLabel={qualitySortLabels[sortKey ?? 'https']}>{quality.ready ? <NodeQualityValue row={readings?.[row.key]} sort={sortKey ?? 'https'} /> : '读取中…'}</TableCell>}
               <TableCell mobileLabel="筛选依据"><span className="muted">{row.reasons.length ? row.reasons.join(' · ') : policy?.keep.includes(row.region) ? '命中保留地区 · ' + regionLabel(row.region) : '符合当前筛选条件'}</span>

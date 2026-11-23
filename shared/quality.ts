@@ -9,7 +9,7 @@ export const qualityConfig = z.strictObject({
   speedConcurrency: integer(1, 2), seconds: integer(2, 15), mebibytes: integer(1, 32), ai: z.boolean(),
 })
 export type QualityConfig = z.infer<typeof qualityConfig>
-export const aiStates = ['reachable', 'unavailable', 'authentication', 'region_restricted', 'region_mismatch', 'challenge', 'ip_blocked', 'rate_limited', 'unknown', 'network_error'] as const
+export const aiStates = ['reachable', 'unavailable', 'authentication', 'region_restricted', 'region_mismatch', 'challenge', 'degraded_challenge', 'ip_blocked', 'rate_limited', 'unknown', 'network_error'] as const
 export const evidenceTypes = ['web_entry', 'compliance_json', 'app_gateway', 'http_denied', 'login_redirect', 'credentials_required', 'region_denied', 'region_disagrees', 'region_unconfirmed', 'cf_challenge', 'ip_denied', 'rate_limit', 'unrecognized', 'network'] as const
 const country = z.string().regex(/^[A-Z]{2}$/)
 const aiReading = z.strictObject({
@@ -55,12 +55,22 @@ export interface QualityJob {
   id: string; createdAt: string; finishedAt: string | null; expiresAt: string; status: JobStatus
   config: QualityConfig; total: number; progress: Progress; available: number | null
   targetDeviceId?: string | null; targetDeviceName?: string | null
+  enqueuedAt?: string
   failure: 'probe_error' | 'disconnected' | null
 }
 export interface QualityReport extends Omit<AgentReport, 'results'> {
   createdAt: string; config: QualityConfig; targetDeviceId?: string | null; targetDeviceName?: string | null
   results: (QualityRow & { name: string; sourceName: string })[]
 }
-export interface ProbeDevice { id: string; name: string; remark: string; platform: 'windows' | 'linux'; lastSeenAt: string; status: 'online' | 'busy' | 'offline' }
+export const probeCapabilities = z.object({
+  protocolVersion: integer(1, 255), agentVersion: z.string().regex(/^\d{1,4}\.\d{1,4}\.\d{1,4}$/),
+  mihomoVersion: z.string().max(100).nullable(), localRegion: country.nullable(), localIsp: z.string().max(120).nullable(),
+  ipStack: z.enum(['ipv4', 'ipv6', 'dual']).nullable(),
+})
+export type ProbeCapabilities = z.infer<typeof probeCapabilities>
+export interface ProbeDevice extends Partial<ProbeCapabilities> {
+  id: string; name: string; remark: string; platform: 'windows' | 'linux'; lastSeenAt: string
+  status: 'online' | 'busy' | 'offline'; waiting: number
+}
 export interface DevicePairing { pairing: string; expiresAt: string }
 export interface Pairing { job: QualityJob; pairing: string }

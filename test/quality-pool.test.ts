@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { test } from 'node:test'
 import { defaultFilter } from '../shared/catalog.ts'
 import { poolCondition, resolvePool } from '../shared/group-filter.ts'
-import { compareQuality, qualitySnapshot, qualityValue, type NodeQuality } from '../shared/quality-snapshot.ts'
+import { compareQuality, qualitySnapshot, qualityValue, type NodeQuality, type QualitySnapshot } from '../shared/quality-snapshot.ts'
 import { qualityDefaults, type QualityReport } from '../shared/quality.ts'
 import { exportBackup, restoreBackup } from '../server/backup.ts'
 import { qualitySpaces } from '../server/quality.ts'
@@ -32,12 +32,51 @@ test('quality ordering and pool diagnostics handle missing, failed, tied and par
   assert.equal(fallback.fallback, true)
   assert.deepEqual(fallback.matches, candidates)
   assert.deepEqual(resolvePool({ ...condition, regions: ['US'] }, candidates, snapshot).matches, [])
-  assert.equal(qualityValue(reading, 'ai'), 1.5)
-  assert.equal(qualityValue(reading, 'ChatGPT'), .5)
+  assert.equal(qualityValue(reading, 'ai'), 5)
+  assert.equal(qualityValue(reading, 'ChatGPT'), 2)
+  assert.equal(qualityValue({ ...reading, platforms: { ChatGPT: null, Claude: null, Grok: 'blocked_or_unreachable', Gemini: null } }, 'ai'), 0)
   assert.ok(compareQuality(reading, snapshot.rows.slow, 'loss') < 0)
   assert.ok(compareQuality(reading, snapshot.rows.partial, 'speed') < 0)
-  assert.ok(compareQuality(snapshot.rows.failed, undefined, 'tls') < 0)
-  assert.ok(compareQuality(reading, { ...reading, reachable: null }, 'Grok') < 0)
+  assert.ok(compareQuality(snapshot.rows.failed, undefined, 'tls') > 0)
+  assert.equal(compareQuality(reading, { ...reading, reachable: null }, 'Grok'), 0)
+})
+
+test('fixed buckets, cascade ties, capability guards and two-tier fallbacks also apply to ranked group output', () => {
+  const node = (key: string) => ({ key, name: key, kept: true, region: 'TW', sourceId: 'source01' })
+  const snapshot: QualitySnapshot = { reportId: randomUUID(), config: { ai: true, bandwidth: false }, rows: {
+    fast: { ...reading, jitterMs: 2, exitRegion: 'HK', surfaceIssues: { chatgptApp: 'degraded_challenge' }, platforms: { ChatGPT: 'degraded_challenge', Claude: null, Grok: null, Gemini: 'unlocked' } },
+    smooth: { ...reading, jitterMs: 1, exitRegion: 'TW', platforms: { ChatGPT: 'partial_unlock', Claude: 'unlocked', Grok: null, Gemini: null } },
+    unstable: { ...reading, httpsMs: 250, lossRate: .2, jitterMs: 80, exitRegion: 'TW', platforms: null },
+    missing: { ...reading, lossRate: null }, dead: { ...reading, available: false }, notice: { ...reading, available: false, infoNode: true },
+  } }
+  const keys = ['notice', 'dead', 'untested', 'missing', 'fast', 'unstable', 'smooth']
+  const nodes = keys.map(node)
+  for (const reverse of [false, true]) {
+    const sorted = [...keys].sort((a, b) => compareQuality(snapshot.rows[a], snapshot.rows[b], 'loss', reverse))
+    assert.deepEqual(sorted, [...(reverse ? ['unstable', 'smooth', 'fast'] : ['smooth', 'fast', 'unstable']), 'missing', 'untested', 'dead', 'notice'])
+  }
+  const q = { alive: true, exitRegions: ['TW'], aiPlatforms: ['ChatGPT' as const], minUnlockLevel: 2 as const,
+    maxJitterMs: 10, minBandwidthMbps: 5000, sortBy: 'ai' as const, topN: 1 }
+  const run = (quality: NonNullable<ReturnType<typeof poolCondition>['quality']>, s = snapshot) => resolvePool(poolCondition({ quality }), nodes, s)
+  assert.deepEqual(run(q).matches.map(n => n.key), ['smooth'])
+  const relaxed = run({ ...q, exitRegions: ['HK'], maxLatencyMs: 1, relaxWhenEmpty: true, fallbackWhenEmpty: true })
+  assert.equal(relaxed.relaxed, true)
+  assert.equal(relaxed.fallback, false)
+  assert.deepEqual(relaxed.matches.map(n => n.key), ['fast'])
+  assert.deepEqual(run({ platforms: ['chatgptApp'], relaxWhenEmpty: true }).matches.map(n => n.key), ['fast'])
+  const excluded = resolvePool(poolCondition({ quality: { alive: true } }), [...nodes, { ...node('omitted'), kept: false }], snapshot)
+  assert.equal(excluded.stageCounts.source, nodes.length + 1)
+  assert.equal(excluded.stageCounts.name, nodes.length)
+  assert.equal(excluded.removed.find(r => r.node.key === 'omitted')?.reason, 'source')
+  const fallback = run({ ...q, exitRegions: ['US'], relaxWhenEmpty: true, fallbackWhenEmpty: true })
+  assert.equal(fallback.fallback, true)
+  assert.equal(fallback.matches.length, 1)
+  const guarded = run({ platforms: ['grok'], minBandwidthMbps: 5000 }, { ...snapshot, config: { ai: false, bandwidth: false } })
+  assert.deepEqual(guarded.matches, nodes)
+  const ranked = run({ alive: true, sortBy: 'ChatGPT', topN: 1 })
+  assert.deepEqual(ranked.matches.map(n => n.key), ['smooth'])
+  assert.equal(ranked.stageCounts.limit, 1)
+  assert.equal(ranked.removed.filter(r => r.reason === 'limit').length, ranked.passed.length - 1)
 })
 
 test('previews and releases bind the specified report, remain isolated by profile, and restore pinned results after pruning', async t => {
@@ -98,7 +137,38 @@ test('previews and releases bind the specified report, remain isolated by profil
   const strict = await work.check(state.id, null)
   assert.ok(strict.issues.some(i => i.code === 'pool-quality-empty' && i.severity === 'warning'))
   assert.ok(strict.issues.some(i => i.code === 'group-empty' && i.severity === 'error'))
+  const device = randomUUID()
+  const currentJob = store.get(space.jobs, two.jobId)!
+  const publishReading = (from: string, delays: number[], time: number) => {
+    const data = { ...report(delays), targetDeviceId: from, targetDeviceName: '测试机', finishedAt: new Date(time).toISOString() }
+    store.set(space.reports, data.jobId, data)
+    store.set(space.jobs, data.jobId, { ...currentJob, targetDeviceId: from, id: data.jobId, finishedAt: data.finishedAt })
+    return data
+  }
+  const now = Date.now()
+  const followed = publishReading(device, [230, 75], now)
+  const scoped = await work.saveDraft(state.id, 'test', { revision: state.revision, draft: { ...state.draft, qualityBaselinePolicy: { mode: 'device', deviceId: device } } })
+  assert.equal(work.snapshotFor(work.profileFor(state.id))!.reportId, followed.jobId)
+  publishReading(randomUUID(), [10, 400], now + 100)
+  assert.throws(() => work.check(state.id, undefined, two.jobId), /基准已更新/)
+  await work.publish(state.id, scoped.revision, undefined, followed.jobId)
+  const newest = publishReading(device, [100, 450], now + 200)
+  await work.refreshQuality(state.id)
+  const active = work.activeVersion(work.profileFor(state.id))!
+  assert.equal(active.qualityReportId, newest.jobId)
+  assert.deepEqual(active.view.groups[0].members.map(m => m.name), ['A'])
+  assert.equal(work.subscription(work.profileFor(state.id).token!), active.yaml)
+  publishReading(device, [950, 950], now + 300)
+  await work.refreshQuality(state.id)
+  assert.equal(work.activeVersion(work.profileFor(state.id))!.seq, active.seq)
+  const pinned = await work.saveDraft(state.id, 'test', { revision: scoped.revision, draft: { ...scoped.draft, qualityBaselinePolicy: { mode: 'fixed', reportId: followed.jobId } } })
+  assert.deepEqual((await work.check(state.id)).groups[0].members.map(m => m.name), ['B'])
+  await work.publish(state.id, pinned.revision)
+  await work.refreshQuality(state.id)
+  assert.equal(work.activeVersion(work.profileFor(state.id))!.qualityReportId, followed.jobId)
+  await work.rollback(state.id, active.seq)
   const password = 'quality fixture passphrase'
   await restoreBackup(work, exportBackup(store, password), password, async () => null)
-  assert.deepEqual(work.snapshotFor(work.profileFor(state.id), undefined), qualitySnapshot(one))
+  assert.deepEqual(work.snapshotFor(work.profileFor(state.id), undefined), qualitySnapshot(followed))
+  assert.deepEqual(work.snapshotFor(work.profileFor(state.id), newest.jobId), qualitySnapshot(newest))
 })

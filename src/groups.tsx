@@ -73,13 +73,16 @@ function GroupEditor({ group, onClose, inline, onCopy, onRemove, onDirtyChange }
     return () => onDirtyChange?.(false)
   }, [dirty, onDirtyChange])
   useEffect(() => {
-    if (inline && group && !dirty && state.revision !== revision) {
+    if (state.revision === revision) return
+    if (!group || JSON.stringify(group) === JSON.stringify(original)) {
+      setRevision(state.revision)
+    } else if (inline && !dirty) {
       setOriginal(group)
       setForm(structuredClone(group))
       setPoolIndex(firstPool(group.members))
       setRevision(state.revision)
     }
-  }, [inline, dirty, state.revision, revision, group])
+  }, [inline, dirty, state.revision, revision, group, original])
   const guard = useUnsavedChanges(dirty, '此代理组会恢复为上次保存的配置。')
   const draft = useMemo(() => ({
     ...state.draft,

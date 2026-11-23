@@ -15,6 +15,9 @@ import { createQualityService, qualitySpaces } from '../server/quality.ts'
 import { openStore } from '../server/store.ts'
 import { qualityDefaults, type Assignment, type QualityRow } from '../shared/quality.ts'
 import type { Profile } from '../shared/model.ts'
+import { minimumProbeVersion, probeProtocol, probeQueueLimit } from '../shared/quality-options.ts'
+
+const capabilities = { agentVersion: minimumProbeVersion, protocolVersion: probeProtocol, localRegion: 'JP', localIsp: 'Test ISP', ipStack: 'dual', mihomoVersion: '1.0' }
 
 test('quality jobs bind a single worker to an immutable selection, expire safely and preserve idempotent completion', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'submeld-quality-test-'))
@@ -88,8 +91,8 @@ test('a paired PC claims queued jobs across disconnects and loses access immedia
   const origin = 'https://submeld.test'
   const secret = credential()
   const worker = credential()
-  const request = { profileId: profile.id, worker }
-  const enrollment = { profileId: profile.id, name: 'Desk PC', platform: 'windows', secret }
+  const request = { profileId: profile.id, worker, capabilities }
+  const enrollment = { profileId: profile.id, name: 'Desk PC', platform: 'windows', secret, capabilities }
   const invite = () => parseInvite(service.invite(profile.id, origin).pairing).ticket
   const queue = (id: string) => service.queue(profile, { keys: [node.key], config: qualityDefaults, targetDeviceId: id })
   assert.throws(() => service.invite(profile.id, 'http://submeld.test'), /HTTPS/)
@@ -111,7 +114,10 @@ test('a paired PC claims queued jobs across disconnects and loses access immedia
   service.rename(profile.id, firstId, 'Desk')
   const first = queue(firstId)
   assert.equal(first.targetDeviceName, 'Desk')
-  assert.throws(() => queue(firstId))
+  const extra = Array.from({ length: probeQueueLimit - 1 }, () => queue(firstId))
+  assert.throws(() => queue(firstId), /队列已满/)
+  assert.equal(service.devices(profile.id).find(d => d.id === firstId)?.waiting, 5)
+  for (const job of extra) service.cancel(profile.id, job.id)
   assert.throws(() => service.pair(profile.id, first.id, origin))
   assert.equal(service.agent('poll', otherSecret, request), null)
   service.reassign(profile.id, first.id, secondId)
@@ -133,7 +139,7 @@ test('a paired PC claims queued jobs across disconnects and loses access immedia
   assert.equal(service.devices(profile.id).find(d => d.id === firstId)?.lastSeenAt, new Date(clock).toISOString())
   clock += 125_000
   assert.equal(service.devices(profile.id).find(d => d.id === firstId)?.status, 'offline')
-  assert.equal(service.list(profile.id)[0].failure, 'disconnected')
+  assert.equal(service.list(profile.id).find(j => j.id === first.id)!.failure, 'disconnected')
   assert.equal(service.agent('poll', secret, request), null)
   const next = queue(firstId)
   assert.throws(() => service.reassign(profile.id, next.id, secondId))
@@ -144,6 +150,8 @@ test('a paired PC claims queued jobs across disconnects and loses access immedia
   assert.throws(() => service.agent('poll', secret, request))
   assert.throws(() => service.agent('progress', worker, { ...progress, jobId: next.id }))
   assert.throws(() => service.agent('enroll', ticket, enrollment))
+  assert.throws(() => queue(secondId), /离线/)
+  assert.equal(service.agent('poll', otherSecret, request), null)
   const offline = queue(secondId)
   clock += 24 * 60 * 60_000
   assert.equal(service.list(profile.id).find(job => job.id === offline.id)?.status, 'expired')
@@ -169,9 +177,56 @@ test('upgraded devices keep their credentials and legacy waiting jobs require a 
   assert.equal(service.agent('poll', secret, body), null)
   const [device] = service.devices(profileId)
   assert.equal(device.name, '旧探针')
+  assert.throws(() => service.reassign(profileId, id, device.id), /更新探针/)
+  assert.equal(service.agent('poll', secret, { ...body, capabilities }), null)
   service.reassign(profileId, id, device.id)
-  assert.equal((service.agent('poll', secret, body) as Assignment).jobId, id)
+  assert.equal((service.agent('poll', secret, { ...body, capabilities }) as Assignment).jobId, id)
   assert.equal(service.devices(profileId).length, 1)
+})
+
+test('long polls wake only the assigned device and atomic claims preserve FIFO across same-timestamp dispatches', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'submeld-queue-'))
+  const store = openStore(dir)
+  const profile = { id: randomUUID() } as Profile
+  const node = { key: profile.id + '/node0001', name: 'A', sourceName: 'S', connection: {} }
+  let clock = Date.now()
+  const service = createQualityService(store, () => [node], () => clock)
+  t.after(async () => { service.close(); store.close(); await rm(dir, { recursive: true, force: true }) })
+  const token = () => randomBytes(32).toString('base64url')
+  function enroll(name: string) {
+    const secret = token()
+    const ticket = parseInvite(service.invite(profile.id, 'https://submeld.test').pairing).ticket
+    service.agent('enroll', ticket, { profileId: profile.id, platform: 'linux', name, secret, capabilities })
+    return { secret, id: service.devices(profile.id).find(d => d.name === name)!.id }
+  }
+  const a = enroll('A'), b = enroll('B'), worker = token()
+  const body = { worker, profileId: profile.id, capabilities }
+  const queue = (targetDeviceId: string) => service.queue(profile, { config: qualityDefaults, keys: [node.key], targetDeviceId })
+  const deadline = AbortSignal.timeout(2000)
+  const waiting = service.agent('poll', a.secret, { ...body, wait: true }, deadline)
+  const moved = queue(b.id)
+  assert.equal(service.reassign(profile.id, moved.id, a.id).targetDeviceId, a.id)
+  assert.equal(((await waiting) as Assignment).jobId, moved.id)
+  const second = queue(a.id), third = queue(a.id)
+  assert.equal(service.agent('poll', a.secret, { ...body, worker: token() }), null)
+  assert.equal((service.agent('poll', a.secret, body) as Assignment).jobId, moved.id)
+  service.cancel(profile.id, moved.id)
+  assert.equal((service.agent('poll', a.secret, body) as Assignment).jobId, second.id)
+  service.cancel(profile.id, second.id)
+  assert.equal((service.agent('poll', a.secret, body) as Assignment).jobId, third.id)
+  service.cancel(profile.id, third.id)
+  const disconnect = new AbortController()
+  const interrupted = service.agent('poll', a.secret, { ...body, wait: true }, disconnect.signal)
+  disconnect.abort()
+  const next = queue(a.id)
+  assert.equal(await interrupted, null)
+  assert.equal(service.list(profile.id).find(j => j.id === next.id)?.status, 'waiting')
+  clock += 35_000
+  assert.throws(() => queue(a.id), /离线/)
+  assert.equal((service.agent('poll', a.secret, body) as Assignment).jobId, next.id)
+  service.agent('offline', a.secret, body)
+  assert.equal(service.devices(profile.id).find(d => d.id === a.id)?.status, 'offline')
+  assert.equal(service.devices(profile.id).length, 2)
 })
 
 test('measurements distinguish warm handshake success, request loss and insufficient jitter samples', () => {
@@ -187,16 +242,25 @@ test('public platform evidence distinguishes challenge, region, IP ban, login an
   assert.equal(classify('grok', page(403, 'Not available in your country')).state, 'region_restricted')
   assert.equal(classify('grok', page(429)).state, 'rate_limited')
   assert.equal(classify('chatgptWeb', page(200, '{"cookie_consent_required":false,"country_code":"jp"}')).providerRegion, 'JP')
+  assert.equal(classify('chatgptWeb', page(403, '{"error":"unsupported_country","country":"HK"}'), null, 'JP').providerRegion, 'HK')
   assert.equal(classify('chatgptWeb', page(200, '{"cookie_consent_required":false}')).state, 'reachable')
   assert.equal(classify('chatgptWeb', page(200, 'invalid JSON')).needsReview, true)
   assert.equal(classify('grok', page(200, '<title>Access denied | Grok</title>')).needsReview, true)
-  assert.equal(classify('chatgptApp', page(404, 'Not Found')).state, 'reachable')
+  assert.equal(classify('chatgptApp', page(404, 'Not Found')).state, 'unknown')
+  for (const body of ['{"cf_details":"exit (1)"}', '{"cf_details":{"reason":"(2)"}}', '{"cf_details":"Disallowed ISP"}', '{"blocked_why_headline":"ISP"}']) {
+    assert.equal(classify('chatgptApp', page(200, body)).state, 'unavailable')
+  }
+  assert.equal(classify('chatgptApp', page(200, '{"cf_details":"","error":"bad response"}')).state, 'unknown')
   for (const message of ['VPN required', '{"vpn_detected":true}', 'something went wrong', 'unable to load site']) assert.equal(classify('chatgptApp', page(200, message)).state, 'unavailable')
   assert.equal(classify('claudeApi', null).needsReview, false)
-  assert.equal(classify('gemini', page(403, '', '', true), 'JP').state, 'unavailable')
+  assert.equal(classify('gemini', page(403, '', '', true), 'JP').state, 'challenge')
   assert.equal(classify('gemini', page(403), 'HK').state, 'unavailable')
-  assert.equal(classify('gemini', page(403), 'RU').state, 'region_restricted')
-  assert.equal(classify('claudeWeb', page(403), 'HK').state, 'region_restricted')
+  assert.equal(classify('gemini', page(403), 'RU').state, 'unavailable')
+  assert.equal(classify('gemini', page(302, '', 'https://www.google.com/sorry/index')).state, 'degraded_challenge')
+  assert.equal(classify('gemini', page(302, '', '/unsupported')).state, 'region_restricted')
+  assert.equal(classify('gemini', page(200, '<title>gemini</title>')).evidence, 'region_unconfirmed')
+  assert.equal(classify('claudeWeb', page(403), 'JP', 'HK').state, 'region_restricted')
+  assert.equal(classify('claudeWeb', page(403, '', '', true), 'HK', 'JP').state, 'degraded_challenge')
   assert.equal(classify('claudeWeb', page(302, '', '/login')).needsReview, false)
   assert.equal(classify('claudeWeb', page(302, '', 'https://www.claude.com/app-unavailable-in-region')).state, 'region_restricted')
   assert.equal(classify('claudeApi', page(401, '{"error":{"message":"x-api-key is required"}}')).state, 'reachable')
@@ -205,7 +269,8 @@ test('public platform evidence distinguishes challenge, region, IP ban, login an
   assert.equal(gemini.state, 'reachable')
   assert.equal(gemini.providerRegion, 'JP')
   assert.equal(googleRegion('["K4WWud", "[\"USA\"]"]'.replaceAll('\\','')), 'US')
-  assert.equal(verifyGemini(gemini, 'JP', 'US').state, 'region_mismatch')
+  assert.equal(verifyGemini(gemini, 'JP', 'US').evidence, 'region_disagrees')
+  assert.equal(verifyGemini(gemini, 'JP', 'HK').state, 'reachable')
   assert.equal(verifyGemini(gemini, 'CN', 'CN').state, 'region_restricted')
   assert.deepEqual(classify('gemini', page(200, ',2,1,200,"RUS"'), 'HK'), {
     state: 'region_restricted', evidence: 'region_denied', httpStatus: 200, providerRegion: 'RU', needsReview: false,
@@ -215,9 +280,12 @@ test('public platform evidence distinguishes challenge, region, IP ban, login an
 })
 
 test('the browser-protocol probe collects separate surface evidence and verifies the Google region', async t => {
+  const traces: string[] = []
+  let complianceCalls = 0
   const edge = http.createServer((req, res) => {
-    const host = new URL(req.url!, 'http://fixture.invalid').pathname.slice(1)
-    if (host === 'gemini.google.com') { assert.match(req.headers.cookie ?? '', /SOCS=/); res.end('<title>Gemini</title>,2,1,200,"USA"') }
+    const [host, path] = new URL(req.url!, 'http://fixture.invalid').pathname.slice(1).split('/')
+    if (path === 'cdn-cgi') { traces.push(host); res.end('ip=192.0.2.15\nloc=JP\n') }
+    else if (host === 'gemini.google.com') { assert.match(req.headers.cookie ?? '', /SOCS=/); res.end('<title>Gemini</title>,2,1,200,"USA"') }
     else if (host === 'api.openai.com') res.end('{"cookie_consent_required":false,"region":"JP"}')
     else if (host === 'grok.com') res.writeHead(403, { 'cf-mitigated': 'challenge' }).end('challenge')
     else if (host === 'api.anthropic.com') res.writeHead(401).end('{"error":{"type":"authentication_error"}}')
@@ -231,14 +299,21 @@ test('the browser-protocol probe collects separate surface evidence and verifies
   // Retain the native browser client's actual streams, proxy handling, headers and cancellation.
   const fetch = Impit.prototype.fetch
   t.mock.method(Impit.prototype, 'fetch', function (this: Impit, input: string, init: Parameters<typeof fetch>[1]) {
-    return fetch.call(this, 'http://fixture.invalid/' + new URL(input).hostname, init)
+    const u = new URL(input)
+    if (u.hostname === 'api.openai.com' && complianceCalls++ === 0) return Promise.reject(new Error('ECONNRESET'))
+    return fetch.call(this, 'http://fixture.invalid/' + u.hostname + u.pathname, init)
   })
   const ai = await inspectPlatforms({ port: (edge.address() as AddressInfo).port, password: 'fixture' }, 'JP', new AbortController().signal)
   assert.equal(ai.chatgptWeb.state, 'reachable')
   assert.equal(ai.chatgptApp.state, 'region_restricted')
-  assert.equal(ai.gemini.state, 'region_mismatch')
+  assert.equal(ai.gemini.state, 'reachable')
+  assert.equal(ai.gemini.evidence, 'region_disagrees')
   assert.equal(ai.gemini.providerRegion, 'US')
   assert.equal(ai.claudeWeb.evidence, 'login_redirect')
   assert.equal(ai.claudeApi.state, 'reachable')
-  assert.equal(ai.grok.state, 'challenge')
+  assert.equal(ai.grok.state, 'degraded_challenge')
+  assert.equal(ai.grok.needsReview, false)
+  assert.equal(ai.claudeWeb.providerRegion, 'JP')
+  assert.deepEqual(traces.sort(), ['chatgpt.com', 'claude.ai', 'grok.com'])
+  assert.equal(complianceCalls, 2)
 })

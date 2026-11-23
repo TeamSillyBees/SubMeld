@@ -44,18 +44,19 @@ export async function run(job: Assignment, binary: string, signal: AbortSignal, 
         const row = rows.get(route.node.key)!
         const reason = aiSkipReason(row)
         if (reason) row.aiSkipped = reason
-        if (!row.exit) continue
+        // Without an exit IP, each healthy tunnel needs its own provider observations.
+        const groupKey = row.exit?.ip ?? route.node.key
         const groups = reason ? weakByExit : exits
-        const members = groups.get(row.exit.ip) ?? []
+        const members = groups.get(groupKey) ?? []
         members.push(route)
-        groups.set(row.exit.ip, members)
+        groups.set(groupKey, members)
       }
       done = 0
       progress({ stage: 'ai', done, total: exits.size })
-      await pool([...exits.values()], 2, active, async members => {
+      await pool([...exits], Math.min(6, config.concurrency), active, async ([groupKey, members]) => {
         const first = members.reduce((best, route) => (rows.get(route.node.key)!.httpsMedianMs ?? Infinity) < (rows.get(best.node.key)!.httpsMedianMs ?? Infinity) ? route : best)
         const ai: AiResults = await inspect(first.outlet, rows.get(first.node.key)!.exit?.region ?? null, active)
-        const cached = weakByExit.get(rows.get(first.node.key)!.exit!.ip) ?? []
+        const cached = weakByExit.get(groupKey) ?? []
         for (const { node } of [...members, ...cached]) {
           const row = rows.get(node.key)!
           row.ai = ai

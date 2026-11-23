@@ -1,5 +1,5 @@
 import type { Diff, Draft, EntryKind, Library, Metadata, Profile, Projection, Provider, ProviderData, ProviderMap, ProviderRecord, Source, SourceData, SourceMap, SourceNodes, SourceRecord, SourceSummary, SubscriptionInfo, UpdateLog, Version, VersionSummary, WorkspaceState, WorkspaceStatus } from '../shared/model.ts'
-import { qualitySnapshot, type QualitySnapshot } from '../shared/quality-snapshot.ts'
+import { baselineId, qualitySnapshot, type QualitySnapshot } from '../shared/quality-snapshot.ts'
 import { qualitySpaces } from './quality.ts'
 import type { QualityNode } from '../shared/quality.ts'
 import type { Dataset, DocumentRow, StoredRecord } from './records.ts'
@@ -219,17 +219,23 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
     return { nodes, providers }
   }
 
-  function snapshotFor(profile: Profile, requested: unknown): QualitySnapshot | null {
+  function snapshotFor(profile: Profile, requested?: unknown, recipe = profile.draft): QualitySnapshot | null {
     const spaces = qualitySpaces(profile.id)
-    const id = requested === undefined ? store.list(spaces.jobs).map(([, job]) => job).filter(job => job.status === 'completed')
-      .sort((a, b) => (b.finishedAt ?? '').localeCompare(a.finishedAt ?? ''))[0]?.id : requested
-    if (id == null) return requested === undefined ? activeVersion(profile)?.qualitySnapshot ?? null : null
+    const id = requested === undefined ? baselineId(recipe.qualityBaselinePolicy, store.list(spaces.jobs).map(([, job]) => job), activeVersion(profile)) : requested
+    if (id == null) return null
     const reportId = read(z.uuid(), id)
     const report = store.get(spaces.reports, reportId)
     if (report) return qualitySnapshot(report)
+    if (profile.fixedQualitySnapshot?.reportId === reportId) return profile.fixedQualitySnapshot
     const pinned = activeVersion(profile)?.qualitySnapshot
     if (pinned?.reportId === reportId) return pinned
     throw new UserError('这份质量报告已移出历史记录，请重新选择。', 409)
+  }
+  function previewSnapshot(profile: Profile, requested?: unknown, expected?: unknown, recipe = profile.draft) {
+    const snapshot = snapshotFor(profile, recipe.qualityBaselinePolicy ? undefined : requested, recipe)
+    const displayed = expected !== undefined ? expected : recipe.qualityBaselinePolicy ? requested : undefined
+    if (displayed !== undefined && displayed !== (snapshot?.reportId ?? null)) throw new UserError('质量基准已更新，请重新读取报告并确认预览。', 409)
+    return snapshot
   }
   async function compile(profile: Profile, recipe: Draft, useDraft: boolean, quality: QualitySnapshot | null, replacement?: { key: string; data: Dataset }): Promise<Compilation> {
     const { nodes, providers } = dataFor(profile, recipe, useDraft, replacement)
@@ -256,6 +262,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
       seq: (store.history(versionSpace(profile), 1, 0)[0]?.seq ?? 0) + 1,
       at: timestamp(), kind, parent, counts: compiled.view.counts, yaml: compiled.yaml!,
       recipe, view: compiled.view, qualitySnapshot: compiled.qualitySnapshot ?? null, qualityReportId: compiled.qualitySnapshot?.reportId ?? null,
+      qualityDeviceId: compiled.qualitySnapshot?.targetDeviceId ?? null,
     }
     store.set(versionSpace(profile), versionKey(version.seq), version)
     profile.active = version.seq
@@ -478,6 +485,8 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
       const profile = profileFor(profileId)
       checkRevision(profile, body.revision)
       const draft = resolveDraft(profile, body.draft)
+      const policy = draft.qualityBaselinePolicy
+      const fixed = policy?.mode === 'fixed' ? snapshotFor(profile, policy.reportId) : null
       const structural = structuralGroupIssues(draft)
       if (structural.size) throw new UserError([...structural.values()][0], 422, { id: [...structural.keys()][0] })
       const removedGroups = new Set(profile.draft.groups.filter(previous => !draft.groups.some(group => group.id === previous.id)).map(group => group.id))
@@ -517,6 +526,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
           const onlyRenewals = profile.revision === profile.publishedRevision
             && compareDigest(publicationRecipe(profile.draft)) === compareDigest(publicationRecipe(draft))
           profile.draft = draft
+          profile.fixedQualitySnapshot = fixed ?? undefined
           profile.revision++
           if (onlyRenewals) profile.publishedRevision = profile.revision
           store.set('profiles', profile.id, profile)
@@ -526,16 +536,16 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
     })
   }
 
-  function check(profileId: ProfileId, reportId?: unknown) {
+  function check(profileId: ProfileId, reportId?: unknown, expected?: unknown) {
     const profile = profileFor(profileId)
-    return compile(profile, profile.draft, true, snapshotFor(profile, reportId)).then(result => ({ revision: profile.revision, ...result.view }))
+    return compile(profile, profile.draft, true, previewSnapshot(profile, reportId, expected)).then(result => ({ revision: profile.revision, ...result.view }))
   }
 
-  function publish(profileId: ProfileId, revision: unknown, reportId?: unknown) {
+  function publish(profileId: ProfileId, revision: unknown, reportId?: unknown, expected?: unknown) {
     return mutate(async () => {
       const profile = profileFor(profileId)
       checkRevision(profile, revision)
-      const result = await compile(profile, profile.draft, true, snapshotFor(profile, reportId))
+      const result = await compile(profile, profile.draft, true, previewSnapshot(profile, reportId, expected))
       if (!result.yaml) throw new UserError('检查未通过，当前订阅继续使用上一份成品。', 422, result.view)
       store.transaction(() => {
         for (const job of jobsFor(profile.draft).filter(job => job.enabled)) {
@@ -546,9 +556,26 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
         }
         profile.publishedRevision = profile.revision
         if (!profile.revoked && !profile.token) profile.token = randomBytes(32).toString('base64url')
-        insertVersion(profile, publicationRecipe(profile.draft), result, 'publish')
+        const recipe = publicationRecipe(profile.draft)
+        // Older clients explicitly selected a snapshot for this publication.
+        if (!recipe.qualityBaselinePolicy && reportId === undefined) recipe.qualityBaselinePolicy = { mode: 'latest' }
+        insertVersion(profile, recipe, result, 'publish')
       })
       return state(profile.id)
+    })
+  }
+
+  function refreshQuality(profileId: string) {
+    return mutate(async () => {
+      const profile = profileFor(profileId)
+      const active = activeVersion(profile)
+      const policy = active?.recipe.qualityBaselinePolicy
+      if (!active || active.kind === 'rollback' || !policy || policy.mode === 'fixed' ||
+          !active.recipe.groups.some(g => g.enabled && g.members.some(m => m.kind === 'pool' && m.quality))) return
+      const snapshot = snapshotFor(profile, undefined, active.recipe)
+      if (!snapshot || snapshot.reportId === active.qualityReportId) return
+      const compiled = await compile(profile, active.recipe, false, snapshot)
+      if (compiled.yaml) store.transaction(() => insertVersion(profile, active.recipe, compiled, 'auto', active.seq))
     })
   }
 
@@ -596,7 +623,9 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
         }
       }
       if (data && !message && current.recipe && active && active.kind !== 'rollback') {
-        result = await compile(profile, active.recipe, false, active.qualitySnapshot ?? null, { key: job.key, data })
+        const policy = active.recipe.qualityBaselinePolicy
+        const quality = policy && policy.mode !== 'fixed' ? snapshotFor(profile, undefined, active.recipe) : active.qualitySnapshot ?? null
+        result = await compile(profile, active.recipe, false, quality, { key: job.key, data })
         if (!result.yaml) {
           message = '更新未通过配置检查。' + (result.view.issues.find(issue => issue.severity === 'error')?.message ?? '')
         }
@@ -703,7 +732,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
         })
       })
     },
-    probe, saveDraft, snapshotFor, check, publish, rollback, tick, profileFor, activeVersion,
+    probe, saveDraft, snapshotFor, refreshQuality, check, publish, rollback, tick, profileFor, activeVersion,
     claimRenewalReminders(profileId: ProfileId, body: Body) {
       const timeZone = read(z.string().min(1).max(100), body.timeZone)
       const requested = new Set(read(z.array(z.string().max(75)).max(200), body.dates))
@@ -762,7 +791,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
       const draft = body.draft ? resolveDraft(profile, body.draft) : profile.draft
       const input = String(body.domain ?? '').slice(0, 2048)
       const { nodes, providers } = dataFor(profile, draft, true, null, owner)
-      const projection = evaluate(draft, nodes, providers, false, snapshotFor(profile, body.qualityReportId))
+      const projection = evaluate(draft, nodes, providers, false, previewSnapshot(profile, body.qualityReportId, undefined, draft))
       return redact({
         ...(body.draft && !input.trim() ? { checkedOnly: true } : await matchDomain(projection, input, providers, draft.base.mode)),
         issues: projection.issues.filter(issue => issue.pane === 'rules' && (!body.serviceId || issue.id === body.serviceId)).slice(0, 10),
@@ -856,6 +885,13 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
         if (input.action !== 'create' && input.action !== 'clone') throw new UserError('未知的方案操作。')
         if (store.list('profiles').length >= 30) throw new UserError('最多可保存 30 个独立配置方案。')
         const next = makeProfile(title(), input.action === 'clone' ? profile.draft : blankDraft())
+        if (input.action === 'clone') {
+          const quality = snapshotFor(profile)
+          if (quality) {
+            next.fixedQualitySnapshot = quality
+            next.draft = { ...next.draft, qualityBaselinePolicy: { mode: 'fixed', reportId: quality.reportId } }
+          } else delete next.draft.qualityBaselinePolicy
+        }
         store.transaction(() => {
           store.set('profiles', next.id, next)
           if (input.action === 'clone') {

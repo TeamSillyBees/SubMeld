@@ -128,7 +128,15 @@ export function createApplication(options: Options = {}) {
         if (!token) throw new UserError('缺少探针凭据。', 401)
         const action = path.slice('/api/quality/agent/'.length)
         const payload = await readBody(request, origin, action === 'complete' ? adminBodyMax : 4096)
-        return json(response, 200, quality.agent(action, token, payload))
+        const connection = new AbortController()
+        const disconnect = () => connection.abort()
+        response.once('close', disconnect)
+        try {
+          const result = await quality.agent(action, token, payload, connection.signal)
+          if (action === 'complete') await workspace.refreshQuality(String(payload.profileId))
+          if (!response.destroyed) json(response, 200, result)
+          return
+        } finally { response.off('close', disconnect) }
       }
       const open = ['/api/setup', '/api/login'].includes(path) && method === 'POST'
       const owner = auth.check(request)
@@ -154,7 +162,7 @@ export function createApplication(options: Options = {}) {
         case 'POST /api/quality/create': result = quality.queue(workspace.profileFor(profile), body); break
         case 'POST /api/quality/pair': result = quality.pair(workspace.profileFor(profile).id, body.id, publicUrl?.origin ?? origin); break
         case 'POST /api/quality/cancel': result = quality.cancel(workspace.profileFor(profile).id, body.id); break
-        case 'GET /api/quality/snapshot': result = workspace.snapshotFor(workspace.profileFor(profile), address.searchParams.get('id')); break
+        case 'GET /api/quality/snapshot': result = workspace.snapshotFor(workspace.profileFor(profile), address.searchParams.get('id') ?? undefined); break
         case 'GET /api/quality/report': result = quality.report(workspace.profileFor(profile).id, address.searchParams.get('id')); break
         case 'GET /api/quality/download': {
           const filename = 'submeld-quality-probe.tgz'
@@ -177,8 +185,8 @@ export function createApplication(options: Options = {}) {
         case 'POST /api/candidate': result = await workspace.candidate(profile, body.id, body.accept === true); break
         case 'POST /api/match': result = await workspace.match(profile, owner!, body); break
         case 'GET /api/provider-content': result = workspace.providerContent(profile, address.searchParams.get('id'), page, (address.searchParams.get('q') ?? '').slice(0, 500)); break
-        case 'POST /api/check': result = await workspace.check(profile, body.qualityReportId); break
-        case 'POST /api/publish': result = await workspace.publish(profile, body.revision, body.qualityReportId); break
+        case 'POST /api/check': result = await workspace.check(profile, body.qualityReportId, body.expectedQualityReportId); break
+        case 'POST /api/publish': result = await workspace.publish(profile, body.revision, body.qualityReportId, body.expectedQualityReportId); break
         case 'POST /api/rollback': result = await workspace.rollback(profile, body.seq); break
         case 'GET /api/current': result = workspace.current(profile); break
         case 'GET /api/history': result = workspace.history(profile, page); break
@@ -218,6 +226,7 @@ export function createApplication(options: Options = {}) {
     server, workspace, handleRequest,
     async close() {
       clearInterval(cleanup)
+      quality.close()
       if (server.listening) await new Promise(resolve => server.close(resolve))
       await workspace.stop()
       store.close()

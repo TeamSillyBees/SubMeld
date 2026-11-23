@@ -18,8 +18,19 @@ TTOTT TUNTN TURTR TUVTV TWNTW TZATZ UGAUG UKRUA UMIUM URYUY USAUS UZBUZ VATVA VC
 VIRVI VNMVN VUTVU WLFWF WSMWS YEMYE ZAFZA ZMBZM ZWEZW
 `.trim().split(/\s+/)
 const codes = new Map(countries.map(pair => [pair.slice(0, 3), pair.slice(3)]))
+const alpha2 = new Set([...codes.values(), 'XK'])
 export function countryCode(value: unknown) {
   if (typeof value !== 'string') return null
   const code = value.toUpperCase()
-  return /^[A-Z]{2}$/.test(code) ? code : codes.get(code) ?? null
+  return alpha2.has(code) ? code : codes.get(code) ?? null
+}
+
+// Consumer availability, checked 2026-11-23. Compare only with the provider's own region signal.
+// https://help.openai.com/en/articles/7947663
+// https://www.anthropic.com/legal/supported-regions (includes dependencies of supported countries)
+// https://support.google.com/gemini/answer/13575153 (personal accounts)
+export const unlistedRegions = {
+  ChatGPT: new Set('AI AQ AS BQ BV BY CC CK CN CU CW CX EH FK GG GI GS GU HK HM IM IO IR JE KP MO MP MS NF NU PN PR RU SX SY TC TK UM VE VG VI XK'.split(' ')),
+  Claude: new Set('AF BY CN CU EH HK IR KP MM MO RU SY VE XK YE'.split(' ')),
+  Gemini: new Set('AF BV BY CN CU IR KP RU SY'.split(' ')),
 }

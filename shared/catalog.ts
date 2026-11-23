@@ -21,6 +21,7 @@ export const regions: [string, string, string, string][] = [
   ['VN', '越南', '🇻🇳', '越南|vietnam|vn|vnm'],
   ['PH', '菲律宾', '🇵🇭', '菲律宾|菲律賓|philippines|ph|phl'],
   ['RU', '俄罗斯', '🇷🇺', '俄罗斯|俄羅斯|莫斯科|moscow|russia|ru|rus'],
+  ['UA', '乌克兰', '🇺🇦', '乌克兰|烏克蘭|基辅|基輔|ukraine|kyiv|ua|ukr'],
   ['TR', '土耳其', '🇹🇷', '土耳其|turkey|istanbul|tr|tur'],
   ['BR', '巴西', '🇧🇷', '巴西|brazil|br|bra'],
   ['CH', '瑞士', '🇨🇭', '瑞士|switzerland|zurich|ch|che'],

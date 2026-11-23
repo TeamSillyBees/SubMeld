@@ -1,33 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
-import { Activity, Copy, Download, Laptop, Plus } from 'lucide-react'
-import { Button as ButtonRoot } from '@/components/ui/button'
+import { Activity, Laptop, Plus } from 'lucide-react'
+import { ProbeSetup } from './probe-setup.tsx'
 import { maxQualityNodes, qualityDefaults } from '../shared/quality-options.ts'
-import type { Pairing, Progress, QualityConfig, QualityJob, QualityReport } from '../shared/quality.ts'
+import type { ProbeDevice, Progress, QualityConfig, QualityJob, QualityReport } from '../shared/quality.ts'
 import { useProject } from './project.tsx'
-import { Alert, Badge, Button, Disclosure, Field, FieldGroup, Input, Modal, NativeSelect, NativeSelectOption, Toggle, copyText, formatTime } from './ui.tsx'
+import { Alert, Badge, Button, Field, FieldGroup, Modal, NativeSelect, NativeSelectOption, Toggle, formatTime } from './ui.tsx'
 import { ReportView, byteSize } from './quality-report.tsx'
 import { asError } from './errors.ts'
 
-const jobNames: Record<QualityJob['status'], string> = { waiting: '等待探针', running: '检测中', completed: '已完成', failed: '检测失败', expired: '配对已过期', cancelled: '已取消' }
+const jobNames: Record<QualityJob['status'], string> = { waiting: '等待探针', running: '检测中', completed: '已完成', failed: '检测失败', expired: '任务已过期', cancelled: '已取消' }
 const stageNames: Record<Progress['stage'], string> = { starting: '启动独立核心', latency: '采样延迟与出口', bandwidth: '测试下载速度', ai: '检查 AI 平台', uploading: '上传检测结果' }
 const historyTime = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
 const live = (job: QualityJob) => job.status === 'waiting' || job.status === 'running'
-function ProbeDownloads({ heading = true }: { heading?: boolean }) {
-  const { pathFor } = useProject()
-  return <div className="quality-downloads"><div>{heading && <strong>下载 PC 探针</strong>}
-    <p>需要 Node.js 24 或更高版本。解压后，Windows 双击 start.cmd，Linux 运行 <code>sh start.sh</code>。首次启动会下载依赖和 Mihomo。</p></div>
-    <div className="actions">{(['windows', 'linux'] as const).map(os => <ButtonRoot key={os} variant="outline" size="sm" asChild>
-      <a download href={pathFor('quality/download?os=' + os)}><Download />{os === 'windows' ? 'Windows' : 'Linux'}</a>
-    </ButtonRoot>)}</div></div>
-}
 function NumberChoice({ label, value, options, onChange, unit = '' }: { label: string; value: number; options: number[]; onChange: (n: number) => void; unit?: string }) {
   return <Field label={label}><NativeSelect value={value} onChange={e => onChange(Number(e.target.value))}>{options.map(n => <NativeSelectOption key={n} value={n}>{n}{unit}</NativeSelectOption>)}</NativeSelect></Field>
 }
 function QualityDialog({ selected, filtered, close }: { selected: string[]; filtered: string[]; close: () => void }) {
-  const { call, notify } = useProject()
+  const { call } = useProject()
   const [jobs, setJobs] = useState<QualityJob[] | null>(null)
   const [focus, setFocus] = useState<string | null>(null)
-  const [pairing, setPairing] = useState<Pairing | null>(null)
+  const [device, setDevice] = useState<ProbeDevice | null>(null)
   const [report, setReport] = useState<QualityReport | null>(null)
   const [error, setError] = useState('')
   const [listError, setListError] = useState('')
@@ -37,13 +29,11 @@ function QualityDialog({ selected, filtered, close }: { selected: string[]; filt
   const [busy, setBusy] = useState(false)
   const [scope, setScope] = useState(selected.length ? 'selected' : 'filtered')
   const [config, setConfig] = useState<QualityConfig>({ ...qualityDefaults })
-  const [manualCopy, setManualCopy] = useState(false)
   const serial = useRef(0)
   const keys = scope === 'selected' ? selected : filtered
   const job = focus === 'new' ? null : jobs?.find(item => item.id === focus) ?? jobs?.[0] ?? null
   const activeJob = jobs?.find(live)
   const newForm = !!jobs && !job
-  const token = job && pairing?.job.id === job.id ? pairing.pairing : ''
   const set = <K extends keyof QualityConfig>(key: K, value: QualityConfig[K]) => setConfig(c => ({ ...c, [key]: value }))
   useEffect(() => {
     let active = true
@@ -51,11 +41,12 @@ function QualityDialog({ selected, filtered, close }: { selected: string[]; filt
     async function poll() {
       const order = serial.current
       try {
-        const next = await call('quality/jobs')
+        const [next, computer] = await Promise.all([call('quality/jobs'), call('quality/device')])
         if (!active || order !== serial.current) return
         setListError('')
         setJobs(next)
-        if (next.some(live)) timer = setTimeout(poll, 2500)
+        setDevice(computer)
+        timer = setTimeout(poll, next.some(live) ? 2500 : 8000)
       } catch (cause) {
         if (active && order === serial.current) { setListError(asError(cause).message); timer = setTimeout(poll, 5500) }
       }
@@ -77,22 +68,16 @@ function QualityDialog({ selected, filtered, close }: { selected: string[]; filt
     try { await work() } catch (cause) { setError(asError(cause).message) }
     finally { setBusy(false); setRefresh(v => v + 1) }
   }
-  function receive(value: Pairing) {
-    setPairing(value); setFocus(value.job.id); setManualCopy(false)
-    setJobs(current => [value.job, ...(current ?? []).filter(j => j.id !== value.job.id)])
-  }
-  async function copy() {
-    if (!job) return
-    let value = token
-    if (!value) { const result = await call('quality/pair', { id: job.id }); receive(result); value = result.pairing }
-    try { await copyText(value); notify('配对链接已复制') } catch { setManualCopy(true) }
+  function receive(value: QualityJob) {
+    setFocus(value.id)
+    setJobs(current => [value, ...(current ?? []).filter(j => j.id !== value.id)])
   }
   const blocked = !keys.length || keys.length > maxQualityNodes || Boolean(activeJob)
   return <Modal title="节点质量检测" detail="从个人电脑的网络环境测量节点。" wide={job?.status === 'completed'} onClose={close}
     footer={newForm ? <><span className="quality-footer-note">{keys.length} 个节点{config.bandwidth && ' · 下载最多 ' + byteSize(keys.length * config.mebibytes * 1024 ** 2)}</span>
-      <Button variant="primary" icon={Activity} busy={busy} disabled={blocked} onClick={() => action(async () => receive(await call('quality/create', { keys, config })))}>创建检测任务</Button></> : undefined}>
+      <Button variant="primary" icon={Activity} busy={busy} disabled={blocked} onClick={() => action(async () => receive(await call('quality/queue', { keys, config })))}>创建检测任务</Button></> : undefined}>
     <div className="quality-workspace">
-      {!!jobs?.length && <div className="quality-history"><NativeSelect aria-label="检测记录" value={job?.id ?? 'new'} onChange={e => { setFocus(e.target.value); setError(''); setManualCopy(false) }}>
+      {!!jobs?.length && <div className="quality-history"><NativeSelect aria-label="检测记录" value={job?.id ?? 'new'} onChange={e => { setFocus(e.target.value); setError('') }}>
         {newForm && <NativeSelectOption value="new">新建检测</NativeSelectOption>}
         {jobs.map(j => <NativeSelectOption key={j.id} value={j.id}>{jobNames[j.status]} · {j.total} 个节点 · {historyTime.format(new Date(j.createdAt))}</NativeSelectOption>)}</NativeSelect>
         {!newForm && !activeJob && <Button icon={Plus} size="small" onClick={() => { setFocus('new'); setError('') }}>新建检测</Button>}</div>}
@@ -114,22 +99,19 @@ function QualityDialog({ selected, filtered, close }: { selected: string[]; filt
             <NumberChoice label="最长时长" value={config.seconds} options={[2, 5, 10, 15]} unit=" 秒" onChange={n => set('seconds', n)} />
             <NumberChoice label="下载并发" value={config.speedConcurrency} options={[1, 2]} onChange={n => set('speedConcurrency', n)} /></FieldGroup>}</section>
         <section className="quality-section"><Toggle label="AI 平台检测" checked={config.ai} onChange={v => set('ai', v)} detail="检查 ChatGPT、Gemini、Claude 与 Grok。相同出口 IP 共享结果。" /></section>
-        <Disclosure title="下载 PC 探针"><ProbeDownloads heading={false} /></Disclosure>
       </>}
       {job?.status === 'waiting' && <>
-        <div className="quality-heading"><div><h3 className="quality-title"><Laptop />等待个人电脑连接</h3><p className="muted">{job.total} 个节点 · 请在 {formatTime(job.expiresAt)} 前领取</p></div><Badge tone="warning">等待探针</Badge></div>
-        <ProbeDownloads />
-        <div className="quality-pair"><strong>在探针窗口粘贴配对链接</strong><p>链接可领取这批节点的连接参数，请仅在自己的电脑上使用。</p>
-          <div className="actions"><Button icon={Copy} variant="primary" busy={busy} onClick={() => action(copy)}>{token ? '复制配对链接' : '生成并复制新链接'}</Button>
-            <Button size="small" variant="ghost" disabled={busy} onClick={() => action(async () => { await call('quality/cancel', { id: job.id }); setPairing(null) })}>取消任务</Button></div>
-          {manualCopy && <Field label="手动复制配对链接"><Input readOnly value={token} onFocus={e => e.target.select()} /></Field>}</div>
+        <div className="quality-heading"><div><h3 className="quality-title"><Laptop />等待探针自动领取</h3>
+          <p className="muted">{job.total} 个节点 · 任务保留至 {formatTime(job.expiresAt)}</p></div><Badge tone="warning">已排队</Badge></div>
+        <Button size="small" variant="ghost" disabled={busy} onClick={() => action(async () => { await call('quality/cancel', { id: job.id }) })}>取消任务</Button>
       </>}
       {job?.status === 'running' && <div className="quality-running" role="status"><div className="quality-heading"><h3 className="quality-title">{stageNames[job.progress.stage]}</h3><Badge tone="success" dot>探针已连接</Badge></div>
         <progress aria-label="本阶段检测进度" max={Math.max(1, job.progress.total)} value={job.progress.done} /><p>{job.progress.done} / {job.progress.total} {job.progress.stage === 'ai' ? '个出口' : '个节点'} · 关闭面板后检测会继续。</p>
-        <Button size="small" busy={busy} onClick={() => action(async () => { await call('quality/cancel', { id: job.id }); setPairing(null) })}>取消任务</Button></div>}
+        <Button size="small" busy={busy} onClick={() => action(async () => { await call('quality/cancel', { id: job.id }) })}>取消任务</Button></div>}
       {job?.status === 'completed' && (report?.jobId === job.id ? <ReportView key={job.id} report={report} /> : !readError && <p role="status">正在读取报告…</p>)}
       {job && !live(job) && job.status !== 'completed' && <Alert tone={job.status === 'failed' ? 'danger' : 'info'} title={jobNames[job.status]}>
-        {job.failure === 'disconnected' ? '服务端已超过两分钟未收到探针进度。' : job.failure === 'probe_error' ? '请检查探针窗口中的错误信息，再创建检测任务。' : '可用当前节点范围重新创建任务。'}</Alert>}
+        {job.failure === 'disconnected' ? '服务端已超过两分钟未收到探针进度。' : job.failure === 'probe_error' ? '请查看电脑上的服务日志，再创建检测任务。' : '可用当前节点范围重新创建任务。'}</Alert>}
+      {jobs && <ProbeSetup device={device} waiting={job?.status === 'waiting'} refresh={() => setRefresh(v => v + 1)} />}
     </div>
   </Modal>
 }

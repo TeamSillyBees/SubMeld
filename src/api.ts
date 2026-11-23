@@ -3,7 +3,7 @@ import type {
   ProviderData, Source, SourceData, SourceNodes, UpdateLog, VersionSummary, WorkspaceState, WorkspaceStatus,
 } from '../shared/model.ts'
 
-import type { Pairing, QualityConfig, QualityJob, QualityReport } from '../shared/quality.ts'
+import type { DevicePairing, ProbeDevice, QualityConfig, QualityJob, QualityReport } from '../shared/quality.ts'
 
 export interface Session { authenticated: boolean; configured: boolean; setup?: boolean }
 export interface LocalInput { format: 'yaml' | 'links'; text: string; acceptPartial?: boolean }
@@ -19,8 +19,9 @@ interface SourceExport {
 }
 
 interface Requests {
-  'quality/create': { keys: string[]; config: QualityConfig }
-  'quality/pair': { id: string }
+  'quality/queue': { keys: string[]; config: QualityConfig }
+  'quality/invite': Record<string, never>
+  'quality/revoke': Record<string, never>
   'quality/cancel': { id: string }
   probe: { kind: 'source'; id: string; url?: string; input?: LocalInput } | ({ kind: 'provider'; id: string } & Provider)
   draft: { revision: number; draft: Draft; localInputs?: Record<string, LocalInput>; localNodes?: Record<string, Connection[]> }
@@ -44,8 +45,10 @@ interface Requests {
 
 interface Responses {
   'quality/jobs': QualityJob[]
-  'quality/create': Pairing
-  'quality/pair': Pairing
+  'quality/device': ProbeDevice | null
+  'quality/invite': DevicePairing
+  'quality/revoke': { ok: boolean }
+  'quality/queue': QualityJob
   'quality/cancel': QualityJob
   [path: `quality/report?id=${string}`]: QualityReport
   state: WorkspaceState

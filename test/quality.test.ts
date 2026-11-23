@@ -9,11 +9,11 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Impit } from 'impit'
 import { classify, googleRegion, inspectPlatforms, verifyGemini } from '../agent/ai.ts'
-import { parsePairing } from '../agent/client.ts'
+import { parseInvite } from '../agent/device.ts'
 import { summarize } from '../agent/measure.ts'
 import { createQualityService, qualitySpaces } from '../server/quality.ts'
 import { openStore } from '../server/store.ts'
-import { qualityDefaults, type QualityRow } from '../shared/quality.ts'
+import { qualityDefaults, type Assignment, type QualityRow } from '../shared/quality.ts'
 import type { Profile } from '../shared/model.ts'
 
 test('quality jobs bind a single worker to an immutable selection, expire safely and preserve idempotent completion', async t => {
@@ -36,6 +36,7 @@ test('quality jobs bind a single worker to an immutable selection, expire safely
   assert.throws(() => service.create(profile, { keys: [], config }, 'https://submeld.test'))
   assert.throws(() => service.create(profile, { keys: [nodes[0].key], config: { ...config, concurrency: 1000 } }, 'https://submeld.test'))
   const body = { profileId: profile.id, jobId: first.job.id, worker: randomBytes(32).toString('base64url') }
+  const parsePairing = (link: string) => ({ ticket: new URL(link).hash.split('.').at(-1)! })
   const token = parsePairing(service.pair(profile.id, first.job.id, 'https://submeld.test').pairing).ticket
   assert.throws(() => service.agent('claim', parsePairing(first.pairing).ticket, body))
   assert.equal(JSON.stringify(store.all()).includes(token), false)
@@ -69,6 +70,64 @@ test('quality jobs bind a single worker to an immutable selection, expire safely
   clock += 120_001
   assert.equal(service.list(profile.id)[0].failure, 'disconnected')
 })
+test('a paired PC claims queued jobs across disconnects and loses access immediately when unpaired', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'submeld-device-test-'))
+  const store = openStore(dir)
+  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }) })
+  const profile = { id: randomUUID() } as Profile
+  const node = { key: profile.id + '/node0001', name: '测试节点', sourceName: '本地', connection: { type: 'http', server: 'localhost', port: 1 } }
+  let clock = Date.now()
+  const service = createQualityService(store, () => [node], () => clock)
+  const credential = () => randomBytes(32).toString('base64url')
+  const origin = 'https://submeld.test'
+  const secret = credential()
+  const worker = credential()
+  const request = { profileId: profile.id, worker }
+  const enrollment = { profileId: profile.id, name: 'Desk PC', platform: 'windows', secret }
+  const invite = () => parseInvite(service.invite(profile.id, origin).pairing).ticket
+  const queue = () => service.queue(profile, { keys: [node.key], config: qualityDefaults })
+  assert.throws(() => service.invite(profile.id, 'http://submeld.test'), /HTTPS/)
+  const first = queue()
+  const expired = invite()
+  clock += 16 * 60_000
+  assert.equal(service.list(profile.id)[0].status, 'waiting')
+  assert.throws(() => service.agent('enroll', expired, enrollment))
+  const replaced = invite()
+  const ticket = invite()
+  assert.throws(() => service.agent('enroll', replaced, enrollment))
+  assert.throws(() => service.agent('enroll', ticket, { ...enrollment, profileId: randomUUID() }))
+  for (let i = 0; i < 2; i++) assert.deepEqual(service.agent('enroll', ticket, enrollment), { ok: true })
+  assert.throws(() => service.agent('enroll', ticket, { ...enrollment, secret: credential() }))
+  assert.throws(invite)
+  assert.throws(() => service.agent('poll', secret, { ...request, profileId: randomUUID() }))
+  assert.ok(!JSON.stringify(store.all()).includes(secret))
+  assert.ok(!JSON.stringify(store.all()).includes(ticket))
+  for (let i = 0; i < 2; i++) assert.equal((service.agent('poll', secret, request) as Assignment).jobId, first.id)
+  assert.equal(service.agent('poll', secret, { ...request, worker: credential() }), null)
+  const progress = { ...request, jobId: first.id, progress: { stage: 'starting', done: 0, total: 1 } }
+  clock += 60_000
+  service.agent('progress', worker, progress)
+  assert.equal(store.get(qualitySpaces(profile.id).inputs, first.id), null)
+  assert.equal(service.agent('poll', secret, request), null)
+  assert.equal(service.device(profile.id)?.lastSeen, new Date(clock).toISOString())
+  clock += 125_000
+  assert.equal(service.device(profile.id)?.online, false)
+  assert.equal(service.list(profile.id)[0].failure, 'disconnected')
+  assert.equal(service.agent('poll', secret, request), null)
+  const next = queue()
+  assert.equal((service.agent('poll', secret, request) as Assignment).jobId, next.id)
+  service.agent('leave', secret, request)
+  assert.equal(service.device(profile.id), null)
+  assert.equal(service.list(profile.id)[0].status, 'cancelled')
+  assert.throws(() => service.agent('poll', secret, request))
+  assert.throws(() => service.agent('progress', worker, { ...progress, jobId: next.id }))
+  assert.throws(() => service.agent('enroll', ticket, enrollment))
+  const offline = queue()
+  clock += 24 * 60 * 60_000
+  assert.equal(service.list(profile.id).find(job => job.id === offline.id)?.status, 'expired')
+  assert.equal(store.get(qualitySpaces(profile.id).inputs, offline.id), null)
+})
+
 test('measurements distinguish warm handshake success, request loss and insufficient jitter samples', () => {
   const s = summarize([{ tlsMs: 4, httpsMs: 60 }, { tlsMs: 12, httpsMs: null }, { tlsMs: 6, httpsMs: 80 }, { tlsMs: 8, httpsMs: 70 }])
   assert.deepEqual(s, { available: true, tlsMedianMs: 7, httpsMedianMs: 70, jitterMs: 15, lossRate: .25 })
@@ -92,7 +151,7 @@ test('public platform evidence distinguishes challenge, region, IP ban, login an
   assert.equal(verifyGemini(gemini, 'CN', 'CN').needsReview, true)
   assert.equal(verifyGemini(gemini, 'JP', null).state, 'unknown')
   assert.equal(verifyGemini(gemini, 'HK', 'HK').state, 'reachable')
-  assert.throws(() => parsePairing('http://public.example/#a'))
+  assert.throws(() => parseInvite('http://public.example/#a'))
 })
 
 test('the browser-protocol probe collects separate surface evidence and verifies the Google region', async t => {

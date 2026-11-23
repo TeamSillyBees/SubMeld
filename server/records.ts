@@ -1,7 +1,7 @@
 import type { Diff, Library, Note, Profile, ProviderData, RejectedItem, SourceData, SubscriptionInfo, UpdateLog, Version } from '../shared/model.ts'
 
 import type { QualityNode, QualityReport } from '../shared/quality.ts'
-import type { StoredQualityJob } from './quality.ts'
+import type { StoredDevice, StoredInvite, StoredQualityJob } from './quality.ts'
 
 export type Dataset = SourceData | ProviderData
 export interface StoredRecord<T extends Dataset = Dataset> {
@@ -14,6 +14,7 @@ export interface StoredRecord<T extends Dataset = Dataset> {
   subscriptionInfo?: SubscriptionInfo | null
 }
 export type Stored<S extends string, K extends string = string> =
+  S extends `quality-device/${string}` ? (K extends 'registration' ? StoredDevice : K extends 'invite' ? StoredInvite : string) :
   S extends `quality-jobs/${string}` ? StoredQualityJob :
   S extends `quality-inputs/${string}` ? QualityNode[] :
   S extends `quality-reports/${string}` ? QualityReport :

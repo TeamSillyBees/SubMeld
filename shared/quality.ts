@@ -59,4 +59,6 @@ export interface QualityReport extends Omit<AgentReport, 'results'> {
   createdAt: string; config: QualityConfig
   results: (QualityRow & { name: string; sourceName: string })[]
 }
+export interface ProbeDevice { name: string; platform: 'windows' | 'linux'; lastSeen: string; online: boolean }
+export interface DevicePairing { pairing: string; expiresAt: string }
 export interface Pairing { job: QualityJob; pairing: string }

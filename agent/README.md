@@ -1,18 +1,44 @@
 # SubMeld PC 探针
 
-探针在个人电脑上测量所选代理节点。Windows 与 Linux 下载包支持 x64 和 ARM64，需要 Node.js 24 或更高版本和 npm。
+把探针安装在经常开机的个人电脑上，即可从这台电脑测量订阅节点。每个方案配对一台电脑。服务在开机后自动运行，空闲时每 15 秒向工作台查询任务，领取任务后才启动 Mihomo。
 
-## 开始检测
+## 安装和配对
 
-1. 在 SubMeld 的「节点管理」勾选节点，或使用来源、地区和搜索条件确定范围。打开「质量检测」，选择「已勾选」或「当前筛选」。当前筛选包含全部分页，单次最多 1,024 个节点。
-2. 选择采样轮数。开启下载测速后，面板会显示这批节点的下载流量上限。创建任务，再下载并解压对应系统的 ZIP。
-3. Windows 双击 `start.cmd`。Linux 在解压目录运行 `sh start.sh`。首次启动会通过 npm 安装锁定版本的协议客户端，并从 Mihomo 官方发行版下载核心、校验 SHA-256。已有核心时，可设置 `SUBMELD_MIHOMO_BIN` 指向其可执行文件。[Mihomo 发行版](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.34)
-4. 将工作台复制的配对链接粘贴到探针窗口，按回车。远程服务使用 HTTPS，本机开发可使用回环 HTTP 地址。链接有效期为 15 分钟，一台探针领取后绑定本次任务。
-5. 在「质量检测」查看进度。完成后可以按延迟、速度、出口 IP 或 AI 平台比较节点，查看单节点详情并导出 JSON。解压目录的 `reports/` 也会保存报告。
+在「节点管理 → 质量检测 → 安装并配对常驻探针」下载 `submeld-quality-probe.tgz`，再点击「复制电脑配对链接」。Windows 和 Linux 共用这个 npm 安装包，支持 x64 和 ARM64，需要 Node.js 24+ 和 npm。[npm 本地安装包说明](https://docs.npmjs.com/cli/v11/commands/npm-install/)
 
-探针主动向服务端领取这一批节点的连接参数。每次运行创建独立的临时 Mihomo 工作目录，一个节点对应一个带随机口令的回环 HTTP 监听端口。延迟、下载和平台请求均通过绑定的出站发出。任务结束或正常取消时会关闭子进程并清理临时配置。[Mihomo 监听器配置](https://wiki.metacubex.one/en/config/inbound/listeners/)
+**Windows** 在安装包所在目录打开管理员 PowerShell，运行以下两条命令。
 
-若日常客户端启用了系统级 TUN，外层连接仍受操作系统路由影响。需要从特定物理网卡出站时，可在启动前设置 `SUBMELD_PROBE_INTERFACE` 为本机网卡名称，并核对日常客户端的 TUN 路由或进程排除规则。探针使用自身的监听端口与临时配置，保留系统代理设置。
+```powershell
+npm install --global ./submeld-quality-probe.tgz
+submeld-probe install
+```
+
+**Linux** 在使用 systemd 247 或更高版本的主机上，进入安装包所在目录运行以下命令。系统 Node.js 和 npm 需要在 sudo 的命令搜索路径中。
+
+```sh
+sudo npm install --global ./submeld-quality-probe.tgz
+sudo submeld-probe install
+```
+
+安装器提示时粘贴配对链接。链接有效期为 15 分钟，远程工作台使用 HTTPS，本机可用回环 HTTP。登记成功后，工作台显示电脑名称、在线状态和最近联系时间。此后即可关闭终端。
+
+安装器会校验官方 Mihomo 核心的 SHA-256，并把 Node.js、探针程序与平台依赖复制到系统服务目录。使用已有 Mihomo 时，可在安装命令的环境中设置 `SUBMELD_MIHOMO_BIN` 为可执行文件的绝对路径。Windows 使用固定版本的 WinSW 2.12.0 注册延迟自动启动的 `SubMeldProbe` 服务，以 LocalService 运行。Linux 启用 `submeld-probe.service`，由 systemd 分配专用运行身份。[Mihomo 发行版](https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.34) · [WinSW 服务配置](https://github.com/winsw/winsw/blob/v2.12.0/doc/xmlConfigFile.md) · [systemd 运行环境](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html)
+
+## 创建检测任务
+
+在「节点管理 → 质量检测」选择「已勾选」或「当前筛选」。筛选范围包括全部分页，单次最多 1,024 个节点。选择采样轮数和可选的下载测速、AI 平台检测，再点击「创建检测任务」。开启下载测速时，面板会显示本批的下载流量上限。
+
+同一方案可保留一个待领取或运行中的任务。离线期间新建的任务最多等待 24 小时。电脑恢复连接后自动领取，断网期间会逐步延长重试间隔，最长为 5 分钟。工作台显示检测进度、节点详情和可导出的 JSON 报告。运行中断后，两分钟没有进度的任务会标记为失败，需要重新创建才会再次消耗检测流量。
+
+每次检测使用独立的临时 Mihomo 工作目录，一个节点对应一个带随机口令的回环 HTTP 端口。探针通过绑定的出站发送请求。若日常客户端启用了系统级 TUN，外层连接仍受系统路由影响。需要使用特定网卡时，可在运行 `submeld-probe install` 的环境中设置 `SUBMELD_PROBE_INTERFACE` 为网卡名称，并核对客户端的路由规则。[Mihomo 监听器配置](https://wiki.metacubex.one/en/config/inbound/listeners/)
+
+## 状态、更新与卸载
+
+- 在两种系统上运行 `submeld-probe status` 可查看服务状态和开机自启状态。
+- Windows 的日志和本地报告分别位于 `%ProgramData%\SubMeldProbe\logs` 和 `%ProgramData%\SubMeldProbe\reports`。Linux 使用 `journalctl -u submeld-probe.service` 查看日志，本地报告在 `/var/lib/submeld-probe/reports/`。
+- 更新时下载新版安装包，在任务空闲时再次运行本系统的两条安装命令。已有配对会沿用，服务运行文件和 Node.js 副本会更新。
+- 要更换电脑，在工作台展开常驻探针并选择「解除配对」。当前常驻任务会取消。新电脑使用新的配对链接。已安装的电脑可以运行 `submeld-probe install --pair` 重新登记。Linux 安装、更新和卸载命令前加 `sudo`。
+- 卸载时先运行 `submeld-probe uninstall`，再运行 `npm uninstall --global submeld-quality-probe`。已有报告保存在数据目录。电脑离线卸载时，还需在工作台解除原配对。
 
 ## 检测口径
 
@@ -41,4 +67,4 @@
 
 格式版本为 `schemaVersion: 1`。每份报告包含任务 ID、时间、测试配置和 `results` 数组。每行保留节点标识、来源、正式采样、聚合指标、出口、下载结果与各平台判定。时间单位为毫秒，`lossRate` 取值为 0–1，`averageBps`、`peakBps` 与 `perSecondBps` 的单位均为字节每秒。跳过或缺乏依据的字段使用 `null`。
 
-工作台为每个配置方案保存最近 12 次任务。关闭页面后探针继续运行。在工作台取消任务或在终端按 Ctrl+C 可以停止检测。服务端超过两分钟收不到探针进度，会将任务标记为中断。检测记录通过 JSON 单独归档，配置备份保存订阅编排数据。
+工作台为每个配置方案保存最近 12 次任务。关闭页面后探针继续运行。在工作台取消任务后，探针会停止本次测量并继续等待后续任务。检测记录通过 JSON 单独归档，配置备份保存订阅编排数据。

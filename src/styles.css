@@ -812,7 +812,7 @@ body:has(.source-settings-dialog) [data-slot=dialog-overlay] { background-color:
 }
 
 .quality-workspace, .quality-detail, .quality-results { display: grid; min-width: 0; gap: 1rem; }
-.quality-heading, .quality-history, .quality-downloads, .quality-pair .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .65rem 1rem; }
+.quality-heading, .quality-history, .quality-downloads, .quality-device .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .65rem 1rem; }
 .quality-heading > div, .quality-history [data-slot=native-select-wrapper] { min-width: 0; }
 .quality-history { padding-bottom: .85rem; border-bottom: 1px solid var(--border); }
 .quality-history select { max-width: 100%; }
@@ -824,9 +824,10 @@ body:has(.source-settings-dialog) [data-slot=dialog-overlay] { background-color:
 .quality-section [data-slot=field-group] { margin-top: .75rem; }
 .quality-downloads { align-items: flex-start; }
 .quality-downloads > div:first-child { flex: 1 1 19rem; }
-.quality-downloads p, .quality-pair p, .quality-running p { color: var(--muted-foreground); margin: .25rem 0 .6rem; }
-.quality-pair { padding-top: 1rem; border-top: 1px solid var(--border); }
-.quality-pair .actions { justify-content: flex-start; }
+.quality-downloads p, .quality-device p, .quality-running p { color: var(--muted-foreground); margin: .25rem 0 .6rem; }
+.quality-device { display: grid; gap: .5rem; min-width: 0; }
+.probe-commands { padding: .65rem .8rem; background: var(--muted); border-radius: var(--radius); white-space: pre-wrap; overflow-wrap: anywhere; font: .78rem/1.65 var(--font-mono); }
+.quality-device .actions { justify-content: flex-start; }
 .quality-footer-note { flex: 1; color: var(--muted-foreground); font-size: .82rem; font-variant-numeric: tabular-nums; }
 .quality-running progress { width: 100%; height: .6rem; accent-color: var(--primary); margin-top: .8rem; }
 .quality-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); margin: .4rem 0; border-block: 1px solid var(--border); }

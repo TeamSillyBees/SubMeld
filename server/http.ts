@@ -144,18 +144,20 @@ export function createApplication(options: Options = {}) {
       }
       let result
       switch (route) {
+        case 'GET /api/quality/device': result = quality.device(workspace.profileFor(profile).id); break
+        case 'POST /api/quality/invite': result = quality.invite(workspace.profileFor(profile).id, publicUrl?.origin ?? origin); break
+        case 'POST /api/quality/revoke': result = quality.revoke(workspace.profileFor(profile).id); break
+        case 'POST /api/quality/queue': result = quality.queue(workspace.profileFor(profile), body); break
         case 'GET /api/quality/jobs': result = quality.list(workspace.profileFor(profile).id); break
         case 'POST /api/quality/create': result = quality.create(workspace.profileFor(profile), body, publicUrl?.origin ?? origin); break
         case 'POST /api/quality/pair': result = quality.pair(workspace.profileFor(profile).id, body.id, publicUrl?.origin ?? origin); break
         case 'POST /api/quality/cancel': result = quality.cancel(workspace.profileFor(profile).id, body.id); break
         case 'GET /api/quality/report': result = quality.report(workspace.profileFor(profile).id, address.searchParams.get('id')); break
         case 'GET /api/quality/download': {
-          const os = address.searchParams.get('os')
-          if (os !== 'windows' && os !== 'linux') throw new UserError('请选择 Windows 或 Linux。')
-          const filename = 'submeld-probe-' + os + '.zip'
+          const filename = 'submeld-quality-probe.tgz'
           const archive = await readFile(join(staticPath, 'probes', filename)).catch(() => { throw new UserError('探针下载包尚未构建，请在服务端运行 npm run build:probe。', 503) })
           response.setHeader('Content-Disposition', 'attachment; filename="' + filename + '"')
-          return send(response, 200, 'application/zip', archive)
+          return send(response, 200, 'application/gzip', archive)
         }
         case 'POST /api/setup': result = auth.setup(request, response, body); break
         case 'POST /api/login': result = auth.login(request, response, body); break

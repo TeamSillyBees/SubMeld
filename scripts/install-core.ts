@@ -20,11 +20,27 @@ const versions: Record<string, [string, string, string]> = {
   'darwin-arm64': ['darwin-arm64', 'gz', '1a7a20eca63fbbaec90137717465bfde488d0db2a3a79b8fadebf9b2545b6e4c'],
 }
 
-export async function installCore() {
+export async function downloadVerified(url: string, archive: string, checksum: string) {
+  let bytes: Buffer
+  try {
+    const curl = process.platform === 'win32' ? join(process.env.SystemRoot!, 'System32', 'curl.exe') : 'curl'
+    await exec(curl, ['--fail', '--location', '--silent', '--show-error', '--max-time', '120', '--output', archive, url], { timeout: 125000, windowsHide: true })
+    bytes = await readFile(archive)
+  } catch {
+    const response = await fetch(url, { signal: AbortSignal.timeout(120000), redirect: 'follow' }).catch(() => null)
+    if (!response?.ok) throw new Error('无法下载 ' + url + '，请检查到 GitHub 的网络连接。')
+    bytes = Buffer.from(await response.arrayBuffer())
+    await writeFile(archive, bytes)
+  }
+  if (createHash('sha256').update(bytes).digest('hex') !== checksum) throw new Error('下载文件的 SHA-256 校验失败。')
+  return bytes
+}
+
+export async function installCore(directory = resolve('bin')) {
   const release = versions[process.platform + '-' + process.arch]
   if (!release) throw new Error('此平台请手动安装 Mihomo，并设置 SUBMELD_MIHOMO_BIN。')
   const [platform, format, checksum] = release
-  const target = resolve('bin', binaryName)
+  const target = resolve(directory, binaryName)
   const installed = await exec(target, ['-v'], { timeout: 8000, windowsHide: true }).catch(() => null)
   if (installed?.stdout.includes(version)) {
     console.log('Mihomo ' + version + ' 已就绪。')
@@ -34,24 +50,13 @@ export async function installCore() {
   const url = 'https://github.com/MetaCubeX/mihomo/releases/download/' + version + '/' + filename
   console.log('正在下载 Mihomo ' + version + '…')
   const temporary = await mkdtemp(join(tmpdir(), 'submeld-core-'))
-  const staged = resolve('bin', randomUUID() + '-' + basename(target))
+  const staged = resolve(directory, randomUUID() + '-' + basename(target))
   try {
     const archive = join(temporary, filename)
-    let bytes
-    try {
-      const curl = process.platform === 'win32' ? 'curl.exe' : 'curl'
-      await exec(curl, ['--fail', '--location', '--silent', '--show-error', '--max-time', '120', '--output', archive, url], { timeout: 125000, windowsHide: true })
-      bytes = await readFile(archive)
-    } catch {
-      const response = await fetch(url, { signal: AbortSignal.timeout(120000), redirect: 'follow' }).catch(() => null)
-      if (!response?.ok) throw new Error('无法下载官方校验核心。请检查到 GitHub 的网络连接，或设置 SUBMELD_MIHOMO_BIN。')
-      bytes = Buffer.from(await response.arrayBuffer())
-      await writeFile(archive, bytes)
-    }
-    if (createHash('sha256').update(bytes).digest('hex') !== checksum) throw new Error('Mihomo 压缩包的 SHA-256 校验失败。')
-    await mkdir(resolve('bin'), { recursive: true })
+    const bytes = await downloadVerified(url, archive, checksum)
+    await mkdir(directory, { recursive: true })
     if (format === 'zip') {
-      await exec('tar.exe', ['-xf', archive, '-C', temporary], { timeout: 30000, windowsHide: true })
+      await exec(join(process.env.SystemRoot!, 'System32', 'tar.exe'), ['-xf', archive, '-C', temporary], { timeout: 30000, windowsHide: true })
       const file = (await readdir(temporary)).find(entry => entry.startsWith('mihomo') && entry.endsWith('.exe'))
       if (!file) throw new Error('官方压缩包中没有找到 Mihomo 可执行文件。')
       await copyFile(join(temporary, file), staged)

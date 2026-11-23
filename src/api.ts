@@ -3,6 +3,8 @@ import type {
   ProviderData, Source, SourceData, SourceNodes, UpdateLog, VersionSummary, WorkspaceState, WorkspaceStatus,
 } from '../shared/model.ts'
 
+import type { Pairing, QualityConfig, QualityJob, QualityReport } from '../shared/quality.ts'
+
 export interface Session { authenticated: boolean; configured: boolean; setup?: boolean }
 export interface LocalInput { format: 'yaml' | 'links'; text: string; acceptPartial?: boolean }
 export interface LinkInfo { url: string | null; active: boolean; revoked: boolean }
@@ -17,6 +19,9 @@ interface SourceExport {
 }
 
 interface Requests {
+  'quality/create': { keys: string[]; config: QualityConfig }
+  'quality/pair': { id: string }
+  'quality/cancel': { id: string }
   probe: { kind: 'source'; id: string; url?: string; input?: LocalInput } | ({ kind: 'provider'; id: string } & Provider)
   draft: { revision: number; draft: Draft; localInputs?: Record<string, LocalInput>; localNodes?: Record<string, Connection[]> }
   check: Record<string, never>
@@ -38,6 +43,11 @@ interface Requests {
 }
 
 interface Responses {
+  'quality/jobs': QualityJob[]
+  'quality/create': Pairing
+  'quality/pair': Pairing
+  'quality/cancel': QualityJob
+  [path: `quality/report?id=${string}`]: QualityReport
   state: WorkspaceState
   'state?nodes=0': Metadata & WorkspaceStatus
   status: WorkspaceStatus

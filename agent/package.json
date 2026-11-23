@@ -1,0 +1,13 @@
+{
+  "name": "submeld-quality-probe",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "impit": "0.14.9",
+    "zod": "4.6.7"
+  }
+}

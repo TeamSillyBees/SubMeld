@@ -1,0 +1,101 @@
+import { useLayoutEffect, useRef, useState } from 'react'
+import { ArrowLeft, ChevronRight, Download, Network } from 'lucide-react'
+import { surfaces, surfaceNames } from '../shared/quality-options.ts'
+import type { AiReading, QualityReport } from '../shared/quality.ts'
+import { Badge, Button, Empty, NativeSelect, NativeSelectOption, Pager, SearchBox, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, downloadJson, usePage } from './ui.tsx'
+
+type Row = QualityReport['results'][number]
+const ms = (n: number | null) => n === null ? '—' : n.toLocaleString() + ' ms'
+const loss = (n: number | null) => n === null ? '—' : Math.round(n * 1000) / 10 + '%'
+export function byteSize(bytes: number) {
+  if (bytes >= 1024 ** 3) return Number((bytes / 1024 ** 3).toFixed(2)) + ' GiB'
+  if (bytes >= 1024 ** 2) return Number((bytes / 1024 ** 2).toFixed(2)) + ' MiB'
+  if (bytes >= 1024) return Number((bytes / 1024).toFixed(1)) + ' KiB'
+  return bytes + ' B'
+}
+const speed = (rate: number) => byteSize(rate) + '/s'
+const stateLabels: Record<AiReading['state'], string> = {
+  reachable: '入口可达', authentication: '需要登录', region_restricted: '地区受限', region_mismatch: '地区不一致',
+  challenge: 'Cloudflare 挑战', ip_blocked: 'IP 被封禁', rate_limited: '请求受限', unknown: '待确认', network_error: '连接失败',
+}
+const evidenceLabels: Record<AiReading['evidence'], string> = {
+  web_entry: '识别到产品入口页', login_redirect: '入口转向登录页', credentials_required: '接口返回认证要求',
+  region_denied: '服务明确拒绝此地区', region_disagrees: 'Google 识别地区与出口地区不同',
+  region_unconfirmed: '无法确认个人账号适用地区', cf_challenge: '响应要求浏览器验证', ip_denied: '服务明确封禁出口 IP',
+  rate_limit: '服务要求降低请求频率', unrecognized: '响应缺少明确判据', network: '请求失败或超时',
+}
+const hasReview = (row: Row) => Boolean(row.ai && Object.values(row.ai).some(v => v.needsReview))
+function Metrics({ values }: { values: [string, string][] }) {
+  return <dl className="quality-metrics">{values.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>
+}
+function NodeDetail({ row, back }: { row: Row; back: () => void }) {
+  const heading = useRef<HTMLHeadingElement>(null)
+  useLayoutEffect(() => {
+    const body = heading.current?.closest('.workspace-dialog-body')
+    if (body) body.scrollTop = 0
+    heading.current?.focus({ preventScroll: true })
+  }, [])
+  const endReason = { bytes: '达到流量上限', duration: '达到时长上限', end: '下载完成', error: '下载中断' }
+  return <div className="quality-detail">
+    <Button size="small" variant="ghost" icon={ArrowLeft} onClick={back}>返回检测结果</Button>
+    <div><h3 className="quality-title" translate="no" ref={heading} tabIndex={-1}>{row.name}</h3><p className="muted">{row.sourceName} · {row.exit ? row.exit.ip + ' / ' + (row.exit.region ?? '地区未知') : '未采集到出口'}</p></div>
+    {row.error && <p>{row.error === 'invalid_node' ? '独立核心无法加载此节点配置。' : '本次 HTTPS 采样均未成功。'}</p>}
+    <Metrics values={[[ 'TLS 握手中位数', ms(row.tlsMedianMs)], ['HTTPS 延迟中位数', ms(row.httpsMedianMs)], ['HTTPS 抖动', ms(row.jitterMs)], ['请求丢包率', loss(row.lossRate)]]} />
+    {!!row.samples.length && <div><h4>各轮采样</h4><ol className="quality-samples">{row.samples.map((s, i) => <li key={i}>第 {i + 1} 轮 <span>TLS {ms(s.tlsMs)} · HTTPS {s.httpsMs === null ? '失败' : ms(s.httpsMs)}</span></li>)}</ol></div>}
+    {row.speed && <section><h4>流式下载</h4>
+      <Metrics values={[['平均速度', speed(row.speed.averageBps)], ['最高速度', speed(row.speed.peakBps)], ['下载流量', byteSize(row.speed.bytes)], ['用时', (row.speed.elapsedMs / 1000).toFixed(2) + ' s']]} />
+      <p className="muted">{endReason[row.speed.stop]} · 各秒速率</p>
+      <ol className="quality-samples">{row.speed.perSecondBps.map((rate, i) => <li key={i}>第 {i + 1} 秒 <span>{speed(rate)}</span></li>)}</ol>
+    </section>}
+    {row.ai && <section><h4>AI 平台</h4><div className="quality-ai">{surfaces.map(surface => {
+      const a = row.ai![surface]
+      return <div key={surface}><strong>{surfaceNames[surface]}</strong><span><Badge tone={a.state === 'reachable' ? 'success' : a.needsReview ? 'warning' : 'danger'}>{stateLabels[a.state]}</Badge>
+        <small>{evidenceLabels[a.evidence]}{a.httpStatus && ' · HTTP ' + a.httpStatus}{a.providerRegion && ' · Google ' + a.providerRegion}{a.needsReview && ' · 需复核'}</small></span></div>
+    })}</div></section>}
+  </div>
+}
+export function ReportView({ report }: { report: QualityReport }) {
+  const [filter, setFilter] = useState('all')
+  const [sort, setSort] = useState('latency')
+  const [platform, setPlatform] = useState<typeof surfaces[number]>('chatgptWeb')
+  const [query, setQuery] = useState('')
+  const [detail, setDetail] = useState<Row | null>(null)
+  const resultList = useRef<HTMLDivElement>(null)
+  const previous = useRef<{ key: string; top: number } | null>(null)
+  useLayoutEffect(() => {
+    if (detail || !previous.current || !resultList.current) return
+    const { key, top } = previous.current
+    const body = resultList.current.closest('.workspace-dialog-body')
+    if (body) body.scrollTop = top
+    resultList.current.querySelector<HTMLButtonElement>('[data-result-key="' + CSS.escape(key) + '"]')?.focus({ preventScroll: true })
+    previous.current = null
+  }, [detail])
+  function inspect(row: Row) {
+    previous.current = { key: row.key, top: resultList.current?.closest('.workspace-dialog-body')?.scrollTop ?? 0 }
+    setDetail(row)
+  }
+  const available = report.results.filter(r => r.available).length
+  const reviews = report.results.filter(hasReview).length
+  const rows = report.results.filter(row => (filter === 'all' || (filter === 'review' ? hasReview(row) : row.available === (filter === 'up')))
+    && [row.name, row.sourceName, row.exit?.ip, row.exit?.region].some(v => v?.toLowerCase().includes(query.trim().toLowerCase())))
+    .sort((a, b) => sort === 'speed' ? (b.speed?.averageBps ?? -1) - (a.speed?.averageBps ?? -1) : (a.httpsMedianMs ?? Infinity) - (b.httpsMedianMs ?? Infinity))
+  const [offset, setOffset] = usePage(rows.length, 20)
+  if (detail) return <NodeDetail row={detail} back={() => setDetail(null)} />
+  return <div ref={resultList} className="quality-results">
+    <div className="quality-heading"><div><h3 className="quality-title">检测结果</h3><p className="muted">可用 {available} / {report.results.length}{report.config.ai ? ' · ' + reviews + ' 个节点的 AI 结果需复核' : ' · AI 未检测'}{!report.config.bandwidth && ' · 下载未检测'}</p></div>
+      <Button icon={Download} size="small" onClick={() => downloadJson('SubMeld-质量检测-' + report.jobId + '.json', report)}>导出 JSON</Button></div>
+    <div className="filters"><SearchBox value={query} placeholder="搜索节点、出口 IP 或地区" onChange={value => { setQuery(value); setOffset(0) }} />
+      <NativeSelect aria-label="检测结果筛选" value={filter} onChange={e => { setFilter(e.target.value); setOffset(0) }}>
+        {Object.entries({ all: '全部结果', up: '可用节点', down: '不可用节点', ...(report.config.ai ? { review: 'AI 待复核' } : {}) }).map(([k, v]) => <NativeSelectOption key={k} value={k}>{v}</NativeSelectOption>)}</NativeSelect>
+      {report.config.bandwidth && <NativeSelect aria-label="结果排序" value={sort} onChange={e => { setSort(e.target.value); setOffset(0) }}><NativeSelectOption value="latency">延迟从低到高</NativeSelectOption><NativeSelectOption value="speed">下载从快到慢</NativeSelectOption></NativeSelect>}
+      {report.config.ai && <NativeSelect aria-label="对比 AI 平台" value={platform} onChange={e => setPlatform(e.target.value as typeof platform)}>{surfaces.map(s => <NativeSelectOption key={s} value={s}>{surfaceNames[s]}</NativeSelectOption>)}</NativeSelect>}
+    </div>
+    {rows.length ? <><Table className="mobile-table quality-table" scrollLabel="节点检测结果"><TableHeader><TableRow><TableHead>节点 / 出口</TableHead><TableHead>可用性</TableHead><TableHead>HTTPS 延迟</TableHead>{report.config.bandwidth && <TableHead>平均下载</TableHead>}{report.config.ai && <TableHead>{surfaceNames[platform]}</TableHead>}<TableHead>详情</TableHead></TableRow></TableHeader>
+      <TableBody>{rows.slice(offset, offset + 20).map(row => <TableRow key={row.key}><TableCell className="table-row-title"><strong translate="no">{row.name}</strong><small>{row.exit ? (row.exit.region ?? '未知') + ' · ' + row.exit.ip : row.sourceName}</small></TableCell>
+        <TableCell mobileLabel="可用性"><Badge tone={row.available ? 'success' : 'danger'}>{row.available ? '可用' : '不可用'}</Badge></TableCell><TableCell mobileLabel="HTTPS 延迟">{ms(row.httpsMedianMs)}</TableCell>
+        {report.config.bandwidth && <TableCell mobileLabel="平均下载">{row.speed ? row.speed.stop === 'error' && !row.speed.bytes ? '下载失败' : speed(row.speed.averageBps) : '未检测'}</TableCell>}
+        {report.config.ai && <TableCell mobileLabel={surfaceNames[platform]}>{row.ai ? <Badge tone={row.ai[platform].state === 'reachable' ? 'success' : row.ai[platform].needsReview ? 'warning' : 'danger'}>{stateLabels[row.ai[platform].state]}</Badge> : '未检测'}</TableCell>}
+        <TableCell><Button variant="ghost" size="small" aria-label={'查看检测详情 ' + row.name} data-result-key={row.key} onClick={() => inspect(row)}>详情<ChevronRight /></Button></TableCell>
+      </TableRow>)}</TableBody></Table>{rows.length > 20 && <Pager offset={offset} count={rows.length} pageSize={20} onChange={setOffset} />}</> : <Empty icon={Network} title="没有匹配的检测结果" />}
+  </div>
+}

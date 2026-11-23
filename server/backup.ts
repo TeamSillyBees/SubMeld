@@ -29,7 +29,7 @@ const topLevel = new Set(['mixed-port', 'port', 'socks-port', 'external-controll
 
 export function exportBackup(store: Store, passphrase: unknown) {
   const password = read(passwordSchema, passphrase)
-  const documents = store.all().filter(([space]) => space !== 'auth').map(([space, key, data]) => [
+  const documents = store.all().filter(([space]) => space !== 'auth' && !space.startsWith('quality-')).map(([space, key, data]) => [
     space, key, space === 'profiles' ? { ...objectValue(data), token: null, revoked: true } : data,
   ])
   const plaintext = Buffer.from(JSON.stringify({ documents }))

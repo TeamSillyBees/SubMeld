@@ -4,6 +4,7 @@ import type { RequestError } from './errors.ts'
 import { asError } from './errors.ts'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check, ChevronRight, Download, Filter as FilterIcon, ListFilter, Network, Pencil, Plus, Radio, RefreshCw, RotateCcw, Star, Trash2, Upload, X } from 'lucide-react'
+import { QualityControl } from './quality.tsx'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
@@ -694,6 +695,7 @@ export function NodesPage() {
     <Panel className="source-scope" title="节点范围与筛选" count={countText(retained, raw)} actions={<>
       <div className="scope-pills"><Segmented label="来源筛选" items={scopes} value={sourceParam} onChange={changeScope} /></div>
       <div className="scope-select"><NativeSelect aria-label="来源筛选" value={sourceParam} onChange={event => changeScope(event.target.value)}>{scopes.map(([value, name]) => <NativeSelectOption key={value} value={value}>{name}</NativeSelectOption>)}</NativeSelect></div>
+      <QualityControl selected={selected} filtered={nodes.map(node => node.key)} />
     </>} />
     {activeSource && <SourcePolicy key={activeSource.id} source={activeSource} busy={busy} saveFilter={saveFilter} />}
     <Panel className="node-detail" title={<>节点明细 <span className="soft-count">共 {formatNumber(raw)}</span> <Badge tone="success">保留 {formatNumber(retained)}</Badge> <Badge>排除 {formatNumber(excluded)}</Badge>

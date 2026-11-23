@@ -6,6 +6,7 @@ import type { Verifier } from './core.ts'
 import type { LoadRuleSetList } from './rule-set-preview.ts'
 import { openStore } from './store.ts'
 import { createAuth } from './auth.ts'
+import { createQualityService } from './quality.ts'
 import { createWorkspace } from './workspace.ts'
 import { createVerifier } from './core.ts'
 import { exportBackup, restoreBackup } from './backup.ts'
@@ -75,6 +76,9 @@ export function createApplication(options: Options = {}) {
   const verify = options.verify ?? createVerifier({ binary: options.binary, directory })
   const auth = createAuth(store, { password: options.password, secure })
   const workspace = createWorkspace({ store, verify, remote: { allowPrivate: options.allowPrivate, timeout: options.remoteTimeout }, tickMs: options.tickMs, loadRuleSetList: options.loadRuleSetList })
+  const quality = createQualityService(store, workspace.selectQualityNodes)
+  const cleanup = setInterval(() => quality.clean(), 60_000)
+  cleanup.unref()
   const staticPath = resolve(options.staticPath ?? 'dist')
   const files = new Map<string, Buffer>()
 
@@ -119,6 +123,13 @@ export function createApplication(options: Options = {}) {
       }
       if (!path.startsWith('/api/')) throw new UserError('找不到此页面。', 404)
       if (method === 'GET' && path === '/api/session') return json(response, 200, auth.status(request))
+      if (method === 'POST' && path.startsWith('/api/quality/agent/')) {
+        const token = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(request.headers.authorization ?? '')?.[1]
+        if (!token) throw new UserError('缺少探针凭据。', 401)
+        const action = path.slice('/api/quality/agent/'.length)
+        const payload = await readBody(request, origin, action === 'complete' ? adminBodyMax : 4096)
+        return json(response, 200, quality.agent(action, token, payload))
+      }
       const open = ['/api/setup', '/api/login'].includes(path) && method === 'POST'
       const owner = auth.check(request)
       if (!open && !owner) throw new UserError('请先登录管理页面。', 401)
@@ -133,6 +144,19 @@ export function createApplication(options: Options = {}) {
       }
       let result
       switch (route) {
+        case 'GET /api/quality/jobs': result = quality.list(workspace.profileFor(profile).id); break
+        case 'POST /api/quality/create': result = quality.create(workspace.profileFor(profile), body, publicUrl?.origin ?? origin); break
+        case 'POST /api/quality/pair': result = quality.pair(workspace.profileFor(profile).id, body.id, publicUrl?.origin ?? origin); break
+        case 'POST /api/quality/cancel': result = quality.cancel(workspace.profileFor(profile).id, body.id); break
+        case 'GET /api/quality/report': result = quality.report(workspace.profileFor(profile).id, address.searchParams.get('id')); break
+        case 'GET /api/quality/download': {
+          const os = address.searchParams.get('os')
+          if (os !== 'windows' && os !== 'linux') throw new UserError('请选择 Windows 或 Linux。')
+          const filename = 'submeld-probe-' + os + '.zip'
+          const archive = await readFile(join(staticPath, 'probes', filename)).catch(() => { throw new UserError('探针下载包尚未构建，请在服务端运行 npm run build:probe。', 503) })
+          response.setHeader('Content-Disposition', 'attachment; filename="' + filename + '"')
+          return send(response, 200, 'application/zip', archive)
+        }
         case 'POST /api/setup': result = auth.setup(request, response, body); break
         case 'POST /api/login': result = auth.login(request, response, body); break
         case 'POST /api/logout': result = auth.logout(request, response); break
@@ -188,6 +212,7 @@ export function createApplication(options: Options = {}) {
   return {
     server, workspace, handleRequest,
     async close() {
+      clearInterval(cleanup)
       if (server.listening) await new Promise(resolve => server.close(resolve))
       await workspace.stop()
       store.close()

@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { gunzipSync } from 'node:zlib'
-import { binaryName } from '../server/core.ts'
+const binaryName = process.platform === 'win32' ? 'mihomo.exe' : 'mihomo'
 
 const exec = promisify(execFile)
 const version = 'v1.19.34'
@@ -19,17 +20,15 @@ const versions: Record<string, [string, string, string]> = {
   'darwin-arm64': ['darwin-arm64', 'gz', '1a7a20eca63fbbaec90137717465bfde488d0db2a3a79b8fadebf9b2545b6e4c'],
 }
 
-async function install() {
+export async function installCore() {
   const release = versions[process.platform + '-' + process.arch]
   if (!release) throw new Error('此平台请手动安装 Mihomo，并设置 SUBMELD_MIHOMO_BIN。')
   const [platform, format, checksum] = release
   const target = resolve('bin', binaryName)
-  if (await access(target).then(() => true, () => false)) {
-    const { stdout } = await exec(target, ['-v'], { timeout: 8000, windowsHide: true })
-    if (stdout.includes(version)) {
-      console.log('Mihomo ' + version + ' 已就绪。')
-      return
-    }
+  const installed = await exec(target, ['-v'], { timeout: 8000, windowsHide: true }).catch(() => null)
+  if (installed?.stdout.includes(version)) {
+    console.log('Mihomo ' + version + ' 已就绪。')
+    return
   }
   const filename = 'mihomo-' + platform + '-' + version + '.' + format
   const url = 'https://github.com/MetaCubeX/mihomo/releases/download/' + version + '/' + filename
@@ -67,7 +66,7 @@ async function install() {
   }
 }
 
-install().catch(error => {
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) installCore().catch(error => {
   console.error(error.message)
   process.exitCode = 1
 })

@@ -1,4 +1,6 @@
 import type { Diff, Draft, EntryKind, Library, Metadata, Profile, Projection, Provider, ProviderData, ProviderMap, ProviderRecord, Source, SourceData, SourceMap, SourceNodes, SourceRecord, SourceSummary, SubscriptionInfo, UpdateLog, Version, VersionSummary, WorkspaceState, WorkspaceStatus } from '../shared/model.ts'
+import { qualitySpaces } from './quality.ts'
+import type { QualityNode } from '../shared/quality.ts'
 import type { Dataset, DocumentRow, StoredRecord } from './records.ts'
 import type { Store } from './store.ts'
 import type { RemoteOptions, Secrets } from './remote.ts'
@@ -165,6 +167,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
   const recordSummaries = new Map<string, Map<string, RecordView>>()
   let defaultProfileId: string | undefined
   store.onWrite((space, key) => {
+    if (space?.startsWith('quality-')) return
     const profileId = space?.split('/')[1]
     if (profileId) snapshots.delete(profileId)
     else snapshots.clear()
@@ -677,6 +680,16 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
       if (!source) throw new UserError('未找到该订阅源。', 404)
       return { url: source.url }
     },
+    selectQualityNodes(profile: Profile, keys: Set<string>): QualityNode[] {
+      const secrets = getAllSecrets()
+      return profile.draft.sources.flatMap(source => {
+        const data = draftDataset(store.get(dataSpace(profile), datasetKey('source', source)))
+        return (data?.nodes ?? []).flatMap(node => {
+          const key = source.id + '/' + node.id
+          return keys.has(key) && node.connection ? [{ key, name: redact(source.tag + node.name, secrets), sourceName: redact(source.name, secrets), connection: node.connection }] : []
+        })
+      })
+    },
     probe, saveDraft, check, publish, rollback, tick, profileFor, activeVersion,
     claimRenewalReminders(profileId: ProfileId, body: Body) {
       const timeZone = read(z.string().min(1).max(100), body.timeZone)
@@ -823,7 +836,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
           if (!other) throw new UserError('应至少保留一个配置方案。')
           store.transaction(() => {
             store.remove('profiles', profile.id)
-            for (const space of [dataSpace(profile), versionSpace(profile), logSpace(profile), noteSpace(profile)]) store.clear(space)
+            for (const space of [dataSpace(profile), versionSpace(profile), logSpace(profile), noteSpace(profile), ...Object.values(qualitySpaces(profile.id))]) store.clear(space)
           })
           return state(other[0])
         }

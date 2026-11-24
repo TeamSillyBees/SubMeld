@@ -5,16 +5,14 @@ import type { Outlet } from './core.ts'
 
 const urls: Record<Surface, string> = {
   chatgptWeb: 'https://api.openai.com/compliance/cookie_requirements', chatgptApp: 'https://android.chat.openai.com/',
-  gemini: 'https://gemini.google.com/?hl=en', claudeWeb: 'https://claude.ai/',
-  claudeApi: 'https://api.anthropic.com/v1/models', grok: 'https://grok.com/',
+  gemini: 'https://gemini.google.com/?hl=en',
 }
 const traceHosts: Partial<Record<Surface, string>> = {
-  chatgptWeb: 'chatgpt.com', chatgptApp: 'chatgpt.com', claudeWeb: 'claude.ai', claudeApi: 'claude.ai', grok: 'grok.com',
+  chatgptWeb: 'chatgpt.com', chatgptApp: 'chatgpt.com',
 }
 export interface Observation { status: number; body: string; location: string; challenge: boolean }
 const restrictedRegions: Record<Surface, ReadonlySet<string>> = {
   chatgptWeb: unlistedRegions.ChatGPT, chatgptApp: unlistedRegions.ChatGPT, gemini: unlistedRegions.Gemini,
-  claudeWeb: unlistedRegions.Claude, claudeApi: unlistedRegions.Claude, grok: unlistedRegions.Grok,
 }
 function redirectTarget(response: Observation, base: string) {
   if (![301, 302, 303, 307, 308].includes(response.status) || !response.location) return null
@@ -34,10 +32,10 @@ export function classify(surface: Surface, response: Observation | null, exitReg
   let payload: Record<string, unknown> | null = null
   if (surface.startsWith('chatgpt')) {
     try { payload = JSON.parse(body) } catch { /* Gateways can also return HTML. */ }
-    providerRegion = countryCode(payload?.country ?? payload?.region ?? payload?.country_code) ?? providerRegion
+    providerRegion = countryCode(payload?.country ?? payload?.region ?? payload?.country_code ?? payload?.countryCode) ?? providerRegion
   }
   if (status === 429) return reading('rate_limited', 'rate_limit', false)
-  const regionPage = redirect && ['chatgpt.com', 'claude.ai', 'claude.com', 'www.claude.com', 'anthropic.com', 'www.anthropic.com', 'grok.com', 'gemini.google.com'].includes(redirect.hostname)
+  const regionPage = redirect && ['chatgpt.com', 'gemini.google.com'].includes(redirect.hostname)
     && /\/(?:unsupported(?:-country|-region)?|unavailable-region|unavailable|app-unavailable-in-region)(?:\/|$)/i.test(redirect.pathname)
   // Ignore translation dictionaries and other inactive text embedded in product page scripts.
   const visible = body.replace(/<(script|style)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi, ' ').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
@@ -45,16 +43,19 @@ export function classify(surface: Surface, response: Observation | null, exitReg
     return reading('region_restricted', 'region_denied', false)
   }
   if (status === 403 && /(?:your|this) IP (?:address )?(?:has been|is) (?:banned|blocked)|(?:banned|blocked) your IP|error (?:code:? )?100[678]\b/i.test(visible)) return reading('ip_blocked', 'ip_denied', false)
-  if (providerRegion && restrictedRegions[surface].has(providerRegion) && (surface !== 'grok' || status === 403)) {
+  if (providerRegion && restrictedRegions[surface].has(providerRegion)) {
     return reading('region_restricted', 'region_policy', false)
   }
-  if (surface === 'gemini' && redirect && ['www.google.com', 'gemini.google.com', 'google.com'].includes(redirect.hostname) && /^\/sorry(?:\/|$)/.test(redirect.pathname)) return reading('degraded_challenge', 'bot_challenge', false)
+  if (surface === 'gemini' && (
+    redirect && ['www.google.com', 'gemini.google.com', 'google.com'].includes(redirect.hostname) && /^\/sorry(?:\/|$)/.test(redirect.pathname)
+    || /unusual traffic from your computer|g-recaptcha|\/sorry\/(?:index|image)|not a robot/i.test(body)
+  )) return reading('degraded_challenge', 'bot_challenge', false)
   if (surface === 'gemini' && redirect?.hostname === 'consent.google.com') return reading('unknown', 'consent_redirect')
-  if (challenge || /<title>\s*just a moment(?:\.{3}|…)/i.test(body) && /challenge-platform|_cf_chl_opt/i.test(body)) {
+  if (challenge
+    || /<title>\s*just a moment(?:\.{3}|…)/i.test(body) && /challenge-platform|_cf_chl_opt/i.test(body)
+    || /challenge-platform|_cf_chl_opt|cf-turnstile/i.test(body) && /just a moment|请稍候|checking (?:your browser|if the site connection is secure)|enable javascript and cookies/i.test(body)) {
     return providerRegion ? reading('degraded_challenge', 'cf_challenge', false) : reading('challenge', 'cf_challenge')
   }
-  if (surface === 'claudeApi' && status === 401 && /api[-_ ]?key|authentication_error|unauthorized/i.test(body)) return reading('reachable', 'credentials_required', false)
-  if (surface === 'claudeWeb' && redirect?.origin === 'https://claude.ai' && /^\/login\/?$/.test(redirect.pathname)) return reading('reachable', 'login_redirect', false)
   if (surface === 'chatgptApp' && !redirect) {
     const details = payload?.cf_details
     const denial = JSON.stringify([details, payload?.error, payload?.blocked_why_headline])
@@ -66,7 +67,11 @@ export function classify(surface: Surface, response: Observation | null, exitReg
       if (status === 200 || status === 403 && /^request is not allowed\.\s*please try again later\.?$/i.test(details.trim())) return reading('reachable', 'app_gateway', false)
       if (status === 403) return reading('unknown', 'unrecognized')
     }
-    return status === 403 || response.status >= 500 ? reading('unavailable', 'http_denied', false) : reading('unknown', 'unrecognized')
+    if (status === 403 && payload === null && /<(?:!doctype|html|title|head|body)\b/i.test(body)) {
+      return reading('unknown', 'unrecognized')
+    }
+    if (response.status >= 500) return reading('unavailable', 'http_denied', true)
+    return status === 403 ? reading('unavailable', 'http_denied', false) : reading('unknown', 'unrecognized')
   }
   if (surface === 'chatgptWeb' && status === 200) {
     if (typeof payload?.cookie_consent_required === 'boolean' || typeof payload?.cookie_requirements === 'object' && payload.cookie_requirements !== null) return reading('reachable', 'compliance_json', false)
@@ -74,16 +79,14 @@ export function classify(surface: Surface, response: Observation | null, exitReg
   }
   if (surface === 'gemini' && status === 403) return reading('unavailable', 'http_denied', false)
   if (status === 401 && /authentication_error|invalid.authentication|missing.{0,16}(?:api.key|token)|unauthorized/i.test(body)) return reading('authentication', 'credentials_required')
-  if (redirect && ['accounts.google.com', 'auth.openai.com', 'auth.anthropic.com', 'accounts.x.ai', new URL(urls[surface]).hostname].includes(redirect.hostname)
+  if (redirect && ['accounts.google.com', 'auth.openai.com', new URL(urls[surface]).hostname].includes(redirect.hostname)
       && /login|sign[-_]?in|oauth|authorize|servicelogin/i.test(redirect.pathname)) return reading('authentication', 'login_redirect')
   // Public product entry pages are observable. A generic success page, API root or app gateway is inconclusive.
-  const brand = { gemini: 'Gemini', claudeWeb: 'Claude', grok: 'Grok' }
-  if (status === 200 && surface in brand) {
+  if (status === 200 && surface === 'gemini') {
     const title = /<title[^>]*>([^<]+)<\/title>/i.exec(body)?.[1] ?? ''
     if (/access denied|forbidden|unavailable|blocked/i.test(title)) return reading('unknown', 'unrecognized')
-    if (title.toLowerCase().includes(brand[surface as keyof typeof brand].toLowerCase())) {
-      const entry = reading('reachable', 'web_entry', false)
-      return surface === 'gemini' ? verifyGemini(entry, exitRegion, providerRegion) : entry
+    if (title.toLowerCase().includes('gemini')) {
+      return verifyGemini(reading('reachable', 'web_entry', false), exitRegion, providerRegion)
     }
   }
   return reading('unknown', 'unrecognized')
@@ -107,7 +110,7 @@ async function observe(client: Impit, url: string, signal: AbortSignal, timeoutM
   const active = AbortSignal.any([signal, controller.signal, deadline])
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   try {
-    const res = await client.fetch(url, { signal: active, timeout: timeoutMs, headers: url === urls.claudeApi ? { 'anthropic-version': '2023-06-01' } : undefined })
+    const res = await client.fetch(url, { signal: active, timeout: timeoutMs })
     const head = { status: res.status, body: '', location: res.headers.get('location') ?? '', challenge: res.headers.get('cf-mitigated') === 'challenge' }
     reader = res.body?.getReader()
     if (head.challenge || res.status === 429 || res.status === 451 || res.status >= 300 && res.status < 400 || !reader) return head
@@ -143,13 +146,13 @@ export function applyExitRegionFallback(results: AiResults, exitRegion: string |
     if (r.providerRegion !== exitRegion) return results
     hosts.add(traceHosts[surface] ?? new URL(urls[surface]).hostname)
   }
-  if (hosts.size < 2) return results
+  if (!hosts.size) return results
   const resolved = { ...results }
   for (const surface of surfaces) {
     const r = results[surface]
     const host = traceHosts[surface]
     if (!host || r.providerRegion || r.httpStatus !== 403 || (r.state !== 'challenge' && r.state !== 'unknown')) continue
-    if (hosts.size === 2 && hosts.has(host)) continue
+    if (![...hosts].some(h => h !== host)) continue
     const restricted = restrictedRegions[surface].has(exitRegion)
     if (restricted || r.state === 'challenge') resolved[surface] = {
       ...r, state: restricted ? 'region_restricted' : 'degraded_challenge', evidence: 'exit_region_fallback', needsReview: false,

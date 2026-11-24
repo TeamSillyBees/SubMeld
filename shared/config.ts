@@ -1,8 +1,8 @@
 import type { Base, Draft, EvaluatedRule, FilteredNode, Group, Issue, MatchResult, MihomoConfig, ProjectedMember, Projection, ProviderData, ProviderMap, ReportIssue, Rule, RuleProvider, Source, SourceData, SourceMap } from './model.ts'
 import ipaddr from 'ipaddr.js'
 import { builtins, regionLabel, reservedNames, ruleTypes } from './catalog.ts'
-import type { QualitySnapshot } from './quality-snapshot.ts'
-import { resolvePool, memberSourceIds } from './group-filter.ts'
+import { latestQualitySnapshot, type LatestQualityMap } from './quality-snapshot.ts'
+import { hasQualityConditions, resolvePool, memberSourceIds } from './group-filter.ts'
 import { isCatalogRuleSet, publicRuleProvider } from './rule-sets.ts'
 
 const invalidRuleChars = /[,\u0000-\u001f\u007f]/
@@ -157,7 +157,7 @@ export function structuralGroupIssues(draft: Draft) {
   return issues
 }
 
-function checkGroups(draft: Draft, rows: FilteredNode[], issue: ReportIssue, quality: QualitySnapshot | null) {
+function checkGroups(draft: Draft, rows: FilteredNode[], issue: ReportIssue, quality: LatestQualityMap | null) {
   const byGroup = new Map(draft.groups.map(group => [group.id, group]))
   const nodes = new Map(rows.map(row => [row.key, row]))
   const retained = rows.filter(row => row.kept)
@@ -165,6 +165,14 @@ function checkGroups(draft: Draft, rows: FilteredNode[], issue: ReportIssue, qua
   for (const [id, message] of structuralGroupIssues(draft)) issue('error', 'groups', id, 'group-structure', message)
   return draft.groups.map(group => {
     const addIssue = (code: string, message: string) => issue('error', 'groups', group.id, code, message)
+    const deviceRecords = group.qualityDeviceId && quality && Object.hasOwn(quality, group.qualityDeviceId)
+      ? quality[group.qualityDeviceId]
+      : null
+    const deviceSnapshot = deviceRecords ? latestQualitySnapshot(deviceRecords, group.qualityDeviceId) : null
+    const groupHasQuality = group.members.some(m => m.kind === 'pool' && hasQualityConditions(m.quality))
+    if (group.enabled && groupHasQuality && !group.qualityDeviceId) {
+      issue('warning', 'groups', group.id, 'group-quality-device', '「' + group.name + '」配置了质量筛选条件，但尚未绑定检测探针。')
+    }
     const members: ProjectedMember[] = []
     const seen = new Set()
     const add = (key: string, name: string, kind: ProjectedMember['kind']) => {
@@ -174,7 +182,7 @@ function checkGroups(draft: Draft, rows: FilteredNode[], issue: ReportIssue, qua
     }
     for (const member of group.members) {
       if (member.kind === 'pool') {
-        const filter = resolvePool(member, retained, quality)
+        const filter = resolvePool(member, retained, deviceSnapshot)
         if (filter.includeError || filter.excludeError) addIssue('group-filter', filter.includeError ? '包含正则：' + filter.includeError : '排除正则：' + filter.excludeError)
         else {
           if (filter.emptied && group.enabled) issue('warning', 'groups', group.id, 'pool-quality-empty',
@@ -392,9 +400,9 @@ function networkConfig(base: Base) {
   }
 }
 
-export function evaluate(draft: Draft, sourceData: SourceMap, ruleData: ProviderMap, withConfig: true, quality?: QualitySnapshot | null): Projection & { config: MihomoConfig }
-export function evaluate(draft: Draft, sourceData: SourceMap, ruleData?: ProviderMap, withConfig?: false, quality?: QualitySnapshot | null): Projection
-export function evaluate(draft: Draft, sourceData: SourceMap, ruleData: ProviderMap = {}, withConfig = false, quality: QualitySnapshot | null = null): Projection & { config?: MihomoConfig } {
+export function evaluate(draft: Draft, sourceData: SourceMap, ruleData: ProviderMap, withConfig: true, quality?: LatestQualityMap | null): Projection & { config: MihomoConfig }
+export function evaluate(draft: Draft, sourceData: SourceMap, ruleData?: ProviderMap, withConfig?: false, quality?: LatestQualityMap | null): Projection
+export function evaluate(draft: Draft, sourceData: SourceMap, ruleData: ProviderMap = {}, withConfig = false, quality: LatestQualityMap | null = null): Projection & { config?: MihomoConfig } {
   const issues: Issue[] = []
   const issue: ReportIssue = (severity, pane, id, code, message, relatedId) => issues.push({ severity, pane, id, code, message, relatedId })
   const rows = []

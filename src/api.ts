@@ -3,8 +3,11 @@ import type {
   ProviderData, Source, SourceData, SourceNodes, UpdateLog, VersionSummary, WorkspaceState, WorkspaceStatus,
 } from '../shared/model.ts'
 
-import type { QualitySnapshot } from '../shared/quality-snapshot.ts'
-import type { DevicePairing, ProbeDevice, QualityConfig, QualityJob, QualityReport } from '../shared/quality.ts'
+import type {
+  DevicePairing, LatestNodeQuality, ProbeDevice, QualityConfigInput, QualityJob, QualityReport,
+  QualityScheduleConfig, QualityScheduleConfigInput, ScheduleRunResult,
+} from '../shared/quality.ts'
+import type { LatestQualityMap } from '../shared/quality-snapshot.ts'
 
 export interface Session { authenticated: boolean; configured: boolean; setup?: boolean }
 export interface LocalInput { format: 'yaml' | 'links'; text: string; acceptPartial?: boolean }
@@ -20,19 +23,21 @@ interface SourceExport {
 }
 
 interface Requests {
-  'quality/queue': { targetDeviceId: string; keys: string[]; config: QualityConfig }
+  'quality/queue': { targetDeviceId: string; keys: string[]; config: QualityConfigInput }
   'quality/invite': Record<string, never>
   'quality/revoke': { id: string }
   'quality/rename': { id: string; remark: string }
   'quality/reassign': { id: string; targetDeviceId: string }
   'quality/cancel': { id: string }
+  'quality/schedule': QualityScheduleConfigInput | undefined
+  'quality/schedule/run': { kind: 'basic' | 'ai' | 'due' }
   probe: { kind: 'source'; id: string; url?: string; input?: LocalInput } | ({ kind: 'provider'; id: string } & Provider)
   draft: { revision: number; draft: Draft; localInputs?: Record<string, LocalInput>; localNodes?: Record<string, Connection[]> }
-  check: { qualityReportId?: string | null; expectedQualityReportId?: string | null }
-  match: { domain: string; qualityReportId?: string | null; draft?: Draft; serviceId?: string }
+  check: Record<string, never>
+  match: { domain: string; draft?: Draft; serviceId?: string }
   candidate: { id: string; accept: boolean }
   refresh: { id?: string; kind?: EntryKind }
-  publish: { revision: number; qualityReportId?: string | null; expectedQualityReportId?: string | null }
+  publish: { revision: number }
   rollback: { seq: number }
   link: { action: 'rotate' | 'revoke' } | undefined
   profiles: { action: 'create' | 'clone' | 'rename' | 'delete'; title?: string }
@@ -55,7 +60,10 @@ interface Responses {
   'quality/revoke': { ok: boolean }
   'quality/queue': QualityJob
   'quality/cancel': QualityJob
-  [path: `quality/snapshot?id=${string}`]: QualitySnapshot
+  'quality/schedule': QualityScheduleConfig
+  'quality/schedule/run': ScheduleRunResult
+  'quality/latest': LatestQualityMap
+  [path: `quality/latest?deviceId=${string}`]: Record<string, LatestNodeQuality>
   [path: `quality/report?id=${string}`]: QualityReport
   state: WorkspaceState
   'state?nodes=0': Metadata & WorkspaceStatus

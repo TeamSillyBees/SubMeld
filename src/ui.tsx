@@ -157,14 +157,14 @@ export function Field({ label, hint, error, children, className, name, disabled 
   </FieldRoot>
 }
 
-export function Toggle({ checked, onChange, label, detail }: { checked?: boolean; onChange: (value: boolean) => void; label: string; detail?: ReactNode }) {
+export function Toggle({ checked, onChange, label, detail, disabled }: { checked?: boolean; onChange: (value: boolean) => void; label: string; detail?: ReactNode; disabled?: boolean }) {
   const id = useId()
-  return <FieldRoot orientation="horizontal" className="setting-toggle">
+  return <FieldRoot orientation="horizontal" className="setting-toggle" data-disabled={disabled || undefined}>
     <FieldContent className="min-w-0">
       <FieldLabel htmlFor={id}>{label}</FieldLabel>
       {detail && <FieldDescription id={id + '-description'}>{detail}</FieldDescription>}
     </FieldContent>
-    <Switch id={id} name={label} checked={checked} onCheckedChange={onChange} aria-describedby={detail ? id + '-description' : undefined} />
+    <Switch id={id} name={label} checked={checked} disabled={disabled} onCheckedChange={onChange} aria-describedby={detail ? id + '-description' : undefined} />
   </FieldRoot>
 }
 

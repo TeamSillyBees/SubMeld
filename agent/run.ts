@@ -2,7 +2,7 @@ import type { AgentReport, Assignment, Progress, QualityRow } from '../shared/qu
 import { aiSkipReason, isSubscriptionNotice } from '../shared/quality-options.ts'
 import { withCore } from './core.ts'
 import { inspectPlatforms } from './ai.ts'
-import { measureLatency, measureSpeed, summarize, targets } from './measure.ts'
+import { measureExit, measureLatency, measureSpeed, summarize, targets } from './measure.ts'
 
 async function pool<T>(items: T[], concurrency: number, signal: AbortSignal, work: (item: T) => Promise<void>) {
   let next = 0
@@ -15,6 +15,7 @@ async function pool<T>(items: T[], concurrency: number, signal: AbortSignal, wor
 export async function run(job: Assignment, binary: string, signal: AbortSignal, progress: (value: Progress) => void,
   endpoints = targets, inspect = inspectPlatforms): Promise<AgentReport> {
   const { config } = job
+  if (!config.basic && !config.ai) throw new Error('基础检测和 AI 检测至少启用一项。')
   const startedAt = new Date().toISOString()
   const notices = new Set(job.nodes.filter(node => isSubscriptionNotice(node.name) || isSubscriptionNotice(String(node.connection.name ?? ''))).map(node => node.key))
   return withCore(binary, job.nodes.filter(node => !notices.has(node.key)), signal, async (routes, invalid, active) => {
@@ -23,18 +24,28 @@ export async function run(job: Assignment, binary: string, signal: AbortSignal, 
       key, samples: [], ...summarize([]), error: notices.has(key) ? 'info_node' : 'invalid_node', exit: null, speed: null, ai: null,
     })
     let done = rows.size
-    progress({ stage: 'latency', done, total: job.nodes.length })
-    await pool(routes, config.concurrency, active, async ({ node, outlet }) => {
-      rows.set(node.key, await measureLatency(node.key, outlet, config, active, endpoints))
-      progress({ stage: 'latency', done: ++done, total: job.nodes.length })
-    })
-    const alive = routes.filter(({ node }) => rows.get(node.key)!.available)
-    if (config.bandwidth) {
-      done = 0
-      progress({ stage: 'bandwidth', done, total: alive.length })
-      await pool(alive, config.speedConcurrency, active, async ({ node, outlet }) => {
-        rows.get(node.key)!.speed = await measureSpeed(outlet, config, active, endpoints.download)
-        progress({ stage: 'bandwidth', done: ++done, total: alive.length })
+    let alive = routes
+    if (config.basic) {
+      progress({ stage: 'latency', done, total: job.nodes.length })
+      await pool(routes, config.concurrency, active, async ({ node, outlet }) => {
+        rows.set(node.key, await measureLatency(node.key, outlet, config, active, endpoints))
+        progress({ stage: 'latency', done: ++done, total: job.nodes.length })
+      })
+      alive = routes.filter(({ node }) => rows.get(node.key)!.available)
+      if (config.bandwidth) {
+        done = 0
+        progress({ stage: 'bandwidth', done, total: alive.length })
+        await pool(alive, config.speedConcurrency, active, async ({ node, outlet }) => {
+          rows.get(node.key)!.speed = await measureSpeed(outlet, config, active, endpoints.download)
+          progress({ stage: 'bandwidth', done: ++done, total: alive.length })
+        })
+      }
+    } else {
+      progress({ stage: 'starting', done, total: job.nodes.length })
+      await pool(routes, config.concurrency, active, async ({ node, outlet }) => {
+        const exit = await measureExit(outlet, active, endpoints)
+        rows.set(node.key, { key: node.key, samples: [], ...summarize([]), error: null, exit, speed: null, ai: null })
+        progress({ stage: 'starting', done: ++done, total: job.nodes.length })
       })
     }
     if (config.ai) {
@@ -58,6 +69,9 @@ export async function run(job: Assignment, binary: string, signal: AbortSignal, 
           active.throwIfAborted()
           const row = rows.get(node.key)!
           row.ai = await inspect(outlet, row.exit?.region ?? null, active)
+          if (!config.basic) {
+            row.available = Boolean(row.exit) || Object.values(row.ai).some(r => r.state !== 'network_error')
+          }
           progress({ stage: 'ai', done: ++done, total })
         }
       })

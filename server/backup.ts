@@ -1,5 +1,3 @@
-import { aiStates, qualityKey, surfaces } from '../shared/quality.ts'
-import { platforms } from '../shared/quality-snapshot.ts'
 import type { Profile, Version } from '../shared/model.ts'
 import type { Store } from './store.ts'
 import type { DocumentRow } from './records.ts'
@@ -17,23 +15,11 @@ import { draft, id, library, objectValue, read, url, UserError } from './schema.
 const HEADER = 'SubMeld.Backup/1'
 const passwordSchema = z.string().min(10).max(256)
 const maxSize = 128 * 1024 * 1024
-const metric = z.number().nonnegative().nullable()
-const snapshotSchema = z.strictObject({ reportId: z.uuid(), config: z.strictObject({ ai: z.boolean(), bandwidth: z.boolean() }).optional(),
-  targetDeviceId: z.uuid().nullable().optional(), targetDeviceName: z.string().max(128).nullable().optional(), rows: z.record(qualityKey, z.strictObject({
-  available: z.boolean(), httpsMs: metric, tlsMs: metric, lossRate: z.number().min(0).max(1).nullable(),
-  jitterMs: metric.optional(), infoNode: z.boolean().optional(), exitRegion: z.string().regex(/^[A-Z]{2}$/).nullable().optional(),
-  exitRegionInferred: z.literal(true).optional(),
-  ipStack: z.enum(['ipv4', 'ipv6']).nullable().optional(),
-  platforms: z.record(z.enum(platforms), z.enum(['unlocked', 'partial_unlock', 'degraded_challenge', 'region_restricted', 'blocked_or_unreachable']).nullable()).nullable().optional(),
-  surfaceIssues: z.partialRecord(z.enum(surfaces), z.enum(aiStates)).optional(),
-  speedMbps: metric, speedFailed: z.boolean(), reachable: z.array(z.enum(surfaces)).max(surfaces.length).nullable(),
-})) })
 const profileSchema = z.object({
   id, title: z.string().min(1).max(64), draft, revision: z.number().int().positive(),
   publishedRevision: z.number().int().positive().nullable(), active: z.number().int().positive().nullable(),
-  fixedQualitySnapshot: snapshotSchema.optional(),
   renewalNotices: z.array(z.object({ id, date: z.iso.date(), expire: z.number().int().positive().nullable() })).optional(),
-}).refine(p => !p.fixedQualitySnapshot || p.draft.qualityBaselinePolicy?.mode === 'fixed' && p.draft.qualityBaselinePolicy.reportId === p.fixedQualitySnapshot.reportId)
+})
 const counter = z.number().int().nonnegative()
 const subscriptionInfoSchema = z.object({
   upload: counter.optional(), download: counter.optional(), total: counter.optional(),
@@ -85,10 +71,9 @@ function validateVersion(input: unknown, secrets: Secrets): asserts input is Ver
   if (!version || typeof version.seq !== 'number' || !Number.isInteger(version.seq) || version.seq < 1 || typeof version.yaml !== 'string'
     || !Array.isArray(view?.nodes) || !Array.isArray(view?.rules)
     || !Array.isArray(view?.groups) || !version.counts) throw new Error()
-  if (version.qualitySnapshot != null) {
-    const snapshot = snapshotSchema.parse(version.qualitySnapshot)
-    if (snapshot.reportId !== version.qualityReportId) throw new Error()
-  } else if (version.qualityReportId != null) throw new Error()
+  delete version.qualitySnapshot
+  delete version.qualityReportId
+  delete version.qualityDeviceId
   const config = objectValue(safeYaml(version.yaml))
   if (!config || Object.keys(config).some(key => !topLevel.has(key))
     || !Array.isArray(config.proxies) || !Array.isArray(config['proxy-groups']) || !Array.isArray(config.rules)

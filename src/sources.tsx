@@ -3,17 +3,16 @@ import type { ProbeSource } from './api.ts'
 import type { RequestError } from './errors.ts'
 import { asError } from './errors.ts'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Check, ChevronRight, Download, Filter as FilterIcon, ListFilter, Network, Pencil, Plus, Radio, RefreshCw, RotateCcw, Star, Trash2, Upload, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Check, ChevronRight, Clock, Download, Filter as FilterIcon, ListFilter, Network, Pencil, Plus, Radio, RefreshCw, RotateCcw, Star, Trash2, Upload, X } from 'lucide-react'
 import { QualityControl } from './quality.tsx'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
 import { commonKeywords, defaultFilter, identifyRegion, regionLabel, regions } from '../shared/catalog.ts'
 import { draftDataset, filterNodes, sourceReferences } from '../shared/config.ts'
-import { QualityBaselinePicker } from './quality-baseline.tsx'
-import { NodeQualityValue, QualitySortBar, qualitySortLabels, SkippedQualityNotice } from './node-quality.tsx'
+import { NodeQualityValue, QualitySortBar, qualitySortLabels, AvailabilityReading, AiUnlockCell } from './node-quality.tsx'
 import { isSubscriptionNotice } from '../shared/quality-options.ts'
-import { compareQuality, type QualitySort } from '../shared/quality-snapshot.ts'
+import { compareQuality, platformSurfaces, type QualitySort } from '../shared/quality-snapshot.ts'
 import { membersForSources, poolCondition, qualityPresets, qualityReason } from '../shared/group-filter.ts'
 import { calendarFormatter, renewalNoticeDays } from '../shared/subscription.ts'
 import { useConfirm, useUnsavedChanges } from './confirm.tsx'
@@ -239,9 +238,10 @@ function SourceEditor({ source, first, onClose }: { source?: Source; first?: str
     try {
       const templates = state.library.filters
       const template = { id: newId(), name: templateName.trim(), filter: { ...form.filter, manual: [] } }
-      applyState(await call('library', { ...state.library, filters: [...templates, template] }))
-      setTemplateName('')
-      notify('筛选模板已保存')
+      if (applyState(await call('library', { ...state.library, filters: [...templates, template] }))) {
+        setTemplateName('')
+        notify('筛选模板已保存')
+      }
     } catch (cause) { const error = asError(cause); setProblem(error) } finally { setBusy('') }
   }
 
@@ -284,8 +284,9 @@ function SourceEditor({ source, first, onClose }: { source?: Source; first?: str
           })) return
           setBusy('candidate')
           try {
-            applyState(await call('candidate', { id: form.id, accept: accepting }))
-            guard.leave(() => navigate('nodes', form.id))
+            if (applyState(await call('candidate', { id: form.id, accept: accepting }))) {
+              guard.leave(() => navigate('nodes', form.id))
+            }
           } catch (cause) { const error = asError(cause); setProblem(error) } finally { setBusy('') }
         }}>{record.pending.accepted ? '撤销采纳' : '采纳候选节点'}</Button>}>{record.pending.reason}</Alert>}
       {!filtering && <form className="stack" id={formId} ref={settingsForm} noValidate inert={Boolean(busy)} onSubmit={event => {
@@ -487,6 +488,7 @@ export function SourcesPage() {
   const setSources = (values: Source[], groups = state.draft.groups) => save({ ...state.draft, sources: values, groups })
 
   async function run(label: string, action: () => unknown) {
+    if (busy) return
     setBusy(label)
     try { await action() } catch (cause) { const error = asError(cause); notify(error.message, 'danger') } finally { setBusy('') }
   }
@@ -514,8 +516,9 @@ export function SourcesPage() {
     await run('import', async () => {
       const body = JSON.parse(await file.text())
       if (body.version !== 1) throw new Error('请选择 SubMeld 导出的订阅源设置文件。')
-      applyState(await call('sources/import', { ...body, revision: state.revision }))
-      notify('订阅源设置已导入')
+      if (applyState(await call('sources/import', { ...body, revision: state.revision }))) {
+        notify('订阅源设置已导入')
+      }
     })
   }
   const removing = remove ? sources.filter(source => remove.includes(source.id)) : []
@@ -536,7 +539,7 @@ export function SourcesPage() {
           </NativeSelect></>}
         </div>
         <div className="actions"><Input ref={importInput} type="file" accept=".json,application/json" hidden onChange={importSources} aria-label="选择订阅源设置文件" />
-          <Button icon={Upload} size="small" busy={busy === 'import'} onClick={() => importInput.current?.click()}>导入设置</Button>
+          <Button icon={Upload} size="small" busy={busy === 'import'} disabled={Boolean(busy)} onClick={() => importInput.current?.click()}>导入设置</Button>
           {sources.length > 0 && <Button icon={Download} size="small" busy={busy === 'export'} disabled={Boolean(busy)} onClick={async () => {
             if (await confirm({ title: '导出订阅源设置？', detail: sources.some(source => source.local) ? '导出的文件包含本地节点的连接凭据，以及已配置的订阅地址。' : '导出的文件含有原始订阅地址和令牌，请妥善保存。', action: '导出设置' })) {
               await run('export', async () => downloadJson('SubMeld-订阅源设置.json', await call('sources/export')))
@@ -563,7 +566,7 @@ export function SourcesPage() {
       onCheck={enabled => setSelected(enabled ? [...selected, source.id] : selected.filter(id => id !== source.id))} />)}
     {visible.length > 30 && <Pager offset={offset} pageSize={30} count={visible.length} onChange={setOffset} />}
     {(modalSource || route.id === 'new') && <SourceEditor key={(modalSource?.id ?? 'new') + '/' + route.detail} source={modalSource} first={route.detail} onClose={() => navigate('sources')} />}
-    {remove && <Modal title="删除订阅源" detail="当前成品会继续可用，移除结果需要正式发布。" onClose={() => setRemove(null)} footer={<><Button onClick={() => setRemove(null)}>取消</Button><Button variant="danger" busy={busy === 'remove'} onClick={removeSources}>确认删除</Button></>}>
+    {remove && <Modal title="删除订阅源" detail="当前成品会继续可用，移除结果需要正式发布。" onClose={() => !busy && setRemove(null)} footer={<><Button disabled={Boolean(busy)} onClick={() => setRemove(null)}>取消</Button><Button variant="danger" busy={busy === 'remove'} disabled={Boolean(busy)} onClick={removeSources}>确认删除</Button></>}>
       <div className="stack tight"><p>将删除 {removing.map(source => source.name).join('、')}。</p>
         {impacted.length > 0 && <Alert tone="warning">以下代理组将移除来自这些订阅源的节点和筛选条件。请在发布前检查组内代理。{impacted.join('、')}</Alert>}
       </div>
@@ -613,11 +616,31 @@ export function NodesPage() {
   const { state, view, route, save, call, reload, notify, quality } = useProject()
   const [sort, setSort] = useSearchValue('sort')
   const [presetId, setPreset] = useSearchValue('quality')
+  const [probeParam, setProbeParam] = useSearchValue('probe')
   const preset = Object.hasOwn(qualityPresets, presetId) ? qualityPresets[presetId] : undefined
   const reverse = sort.startsWith('-')
   const key = reverse ? sort.slice(1) : sort
   const sortKey = Object.hasOwn(qualitySortLabels, key) ? key as QualitySort : null
-  const readings = quality.snapshot?.rows
+  const probeOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const list: { id: string; label: string }[] = []
+    for (const d of quality.devices) {
+      seen.add(d.id)
+      list.push({ id: d.id, label: (d.remark || d.name) + (d.status === 'offline' ? '（离线）' : '') })
+    }
+    for (const id of Object.keys(quality.latest)) {
+      if (!seen.has(id)) list.push({ id, label: quality.deviceNames.get(id) ?? '历史探针' })
+    }
+    return list
+  }, [quality.devices, quality.latest, quality.deviceNames])
+  const activeDeviceId = useMemo(() => {
+    if (probeParam && probeOptions.some(p => p.id === probeParam)) return probeParam
+    return Object.keys(quality.latest)[0] ?? quality.devices[0]?.id ?? ''
+  }, [probeParam, probeOptions, quality.latest, quality.devices])
+  const activeSnapshot = useMemo(() => quality.snapshotFor(activeDeviceId), [quality, activeDeviceId])
+  const readings = activeSnapshot?.rows
+  const showQuality = Boolean(quality.hasData || activeSnapshot || sortKey)
+  const metricSort: QualitySort = sortKey && sortKey !== 'availability' && sortKey !== 'ai' && !(sortKey in platformSurfaces) ? sortKey : 'https'
   const awaitingQuality = Boolean(preset || sortKey) && !quality.ready
   const focusNode = view.nodes.find(row => row.sourceId === route.id && row.id === route.detail)
   const [sourceParam, setSource] = useSearchValue('source', route.id ?? 'all')
@@ -640,7 +663,7 @@ export function NodesPage() {
       setAreas('')
     }
   }, [route.id, route.detail])
-  const nodes = view.nodes.filter(row => (!preset || !qualityReason(preset.condition, readings?.[row.key], quality.snapshot?.config)) && (!source || source === row.sourceId) && (!areas.length || areas.includes(row.region))
+  const nodes = view.nodes.filter(row => (!preset || !qualityReason(preset.condition, readings?.[row.key], activeSnapshot?.config)) && (!source || source === row.sourceId) && (!areas.length || areas.includes(row.region))
     && (searchable(row.name, query) || searchable(row.originalName, query) || searchable(state.notes[row.key]?.note, query))
     && (status === 'all' || status === 'kept' && row.kept || status === 'excluded' && !row.kept || status === 'conflicts' && row.collision || status === 'favorites' && state.notes[row.key]?.favorite))
   if (sortKey) nodes.sort((a, b) => compareQuality(readings?.[a.key], readings?.[b.key], sortKey, reverse, isSubscriptionNotice(a.originalName), isSubscriptionNotice(b.originalName)))
@@ -659,6 +682,7 @@ export function NodesPage() {
   const unknown = sources.reduce((sum, item) => sum + item.unknown, 0)
   const unsupported = sources.reduce((sum, item) => sum + item.unsupported, 0)
   async function saveFilter(filter: Filter) {
+    if (busy) return
     setBusy(true)
     try { await save({ ...state.draft, sources: state.draft.sources.map(item => item.id === source ? { ...item, filter } : item) }, state.revision, '筛选条件已更新') }
     catch (cause) { const error = asError(cause); notify(error.message, 'danger') }
@@ -678,6 +702,7 @@ export function NodesPage() {
   const scopes: [string, string][] = [['all', '全部订阅源（' + countText(view.counts.nodes, view.originalNodes) + '）'],
     ...view.sources.map((item): [string, string] => [item.id, item.name + '（' + countText(item.retained, item.original) + '）'])]
   async function setManual(keys: string[], excluded: boolean) {
+    if (busy) return
     setBusy(true)
     const bySource = new Map()
     for (const key of keys) {
@@ -700,6 +725,7 @@ export function NodesPage() {
     const filteredKeys = status === 'favorites' || status === 'conflicts' ? view.nodes.filter(n =>
       status === 'favorites' ? state.notes[n.key]?.favorite : n.collision).map(n => n.key) : undefined
     const noteMatches = query.trim() ? view.nodes.filter(n => searchable(state.notes[n.key]?.note, query)).map(n => n.key) : []
+    const hasQuality = Boolean(preset || sortKey)
     const pool = poolCondition({ sourceIds: source ? [source] : [], regions: areas,
       quality: sortKey ? { ...preset?.condition, sortBy: sortKey, sortReverse: reverse } : preset?.condition,
       search: query.trim(), nodeKeys: filteredKeys, noteMatches: noteMatches.length ? noteMatches : undefined })
@@ -709,16 +735,18 @@ export function NodesPage() {
     for (let i = 2; taken.has(name); i++) name = base + ' ' + i
     setBusy(true)
     try {
-      await save({ ...state.draft, groups: [...state.draft.groups, { id: newId(), name, type: 'select', enabled: true, members: [pool] }] }, state.revision, '已保存到代理组「' + name + '」')
+      await save({ ...state.draft, groups: [...state.draft.groups, { id: newId(), name, type: 'select', enabled: true, ...(hasQuality && activeDeviceId ? { qualityDeviceId: activeDeviceId } : {}), members: [pool] }] }, state.revision, '已保存到代理组「' + name + '」')
     } catch (e) { notify(asError(e).message, 'danger') } finally { setBusy(false) }
   }
   async function saveNote(value: NoteEditor) {
+    if (busy) return
+    setBusy(true)
     try {
       await call('note', { sourceId: value.row.sourceId, nodeId: value.row.id, favorite: value.favorite, note: value.text })
       await reload()
       guard.leave(() => setNote(null))
       notify('节点备注已保存')
-    } catch (cause) { const error = asError(cause); notify(error.message, 'danger') }
+    } catch (cause) { const error = asError(cause); notify(error.message, 'danger') } finally { setBusy(false) }
   }
   return <div className="stack config-page">
     <h1 className="sr-only" tabIndex={-1}>节点管理</h1>
@@ -726,14 +754,25 @@ export function NodesPage() {
       <div className="scope-pills"><Segmented label="来源筛选" items={scopes} value={sourceParam} onChange={changeScope} /></div>
       <div className="scope-select"><NativeSelect aria-label="来源筛选" value={sourceParam} onChange={event => changeScope(event.target.value)}>{scopes.map(([value, name]) => <NativeSelectOption key={value} value={value}>{name}</NativeSelectOption>)}</NativeSelect></div>
       <QualityControl selected={selected} filtered={nodes.map(node => node.key)} />
+      <ButtonLink page="quality" id="schedules" size="small" variant="ghost" icon={Clock}>定时与报告</ButtonLink>
     </>} />
-    <div className="node-quality-bar"><div className="quality-baseline"><strong>质量基准</strong><QualityBaselinePicker /></div>
+    <div className="node-quality-bar">
+      <div className="quality-probe-picker">
+        {probeOptions.length > 1 ? (
+          <NativeSelect aria-label="质量探针" value={activeDeviceId} onChange={e => setProbeParam(e.target.value)}>
+            {probeOptions.map(p => <NativeSelectOption key={p.id} value={p.id}>{p.label}</NativeSelectOption>)}
+          </NativeSelect>
+        ) : probeOptions.length === 1 ? (
+          <span className="field-note muted">探针：{probeOptions[0].label}</span>
+        ) : (
+          <span className="field-note muted">{quality.error ? '' : quality.ready ? '暂无质量记录' : '正在读取质量记录…'}</span>
+        )}
+        {quality.error && <div className="actions" role="alert"><span className="error-text">{quality.error}</span><Button size="small" onClick={quality.refresh}>重新读取</Button></div>}
+      </div>
       <div className="actions"><NativeSelect aria-label="节点质量筛选" value={preset?.name ? presetId : ''} onChange={e => { setPreset(e.target.value); setOffset(0); setSelected([]) }}>
         <NativeSelectOption value="">不限质量</NativeSelectOption>{Object.entries(qualityPresets).map(([id, p]) => <NativeSelectOption key={id} value={id}>{p.name}</NativeSelectOption>)}
       </NativeSelect><Button size="small" icon={Plus} disabled={busy || awaitingQuality || !nodes.some(n => n.kept)} onClick={savePool}>保存为代理组筛选池</Button></div>
     </div>
-    <SkippedQualityNotice condition={preset?.condition} config={quality.snapshot?.config} />
-    {quality.ready && state.current && quality.reportId && quality.reportId !== state.current.qualityReportId && state.draft.groups.some(g => g.enabled && g.members.some(m => m.kind === 'pool' && m.quality)) && <div className="actions field-note">质量基准已更新。<ButtonLink size="small" page="publish">预览代理组差异</ButtonLink></div>}
     {activeSource && <SourcePolicy key={activeSource.id} source={activeSource} busy={busy} saveFilter={saveFilter} />}
     <Panel className="node-detail" title={<>节点明细 <span className="soft-count">共 {formatNumber(raw)}</span> <Badge tone="success">保留 {formatNumber(retained)}</Badge> <Badge>排除 {formatNumber(excluded)}</Badge>
       {unknown > 0 && <> <Badge tone="warning">未知 {formatNumber(unknown)}</Badge></>}{unsupported > 0 && <> <Badge tone="danger">无法导入 {formatNumber(unsupported)}</Badge></>}</>}
@@ -743,17 +782,17 @@ export function NodesPage() {
         <SearchBox placeholder="搜索节点名或备注" value={query} onChange={value => { setQuery(value); setOffset(0) }} />
         <MultiSelect label="地区筛选" options={regionOptions} values={areas} onChange={value => { setAreas(value.join(',')); setOffset(0) }} placeholder="全部地区" />
       </div>}>
-      {(quality.reportId || sortKey) && <QualitySortBar sort={sortKey} reverse={reverse} change={value => { setSort(value); setOffset(0) }} />}
+      {showQuality && <QualitySortBar sort={sortKey} reverse={reverse} change={value => { setSort(value); setOffset(0) }} />}
       {status === 'conflicts' && nodes.length > 0 && <p className="panel-padding warning-text field-note">可修改名称前缀或排除重名节点。选择「全部订阅源」可查看跨来源的重名节点。</p>}
       {!!selected.length && <div className="batch-bar"><strong>已选 {selected.length} 个节点</strong>
         <Button size="small" onClick={() => setManual(selected, true)} busy={busy}>批量排除</Button>
         <Button size="small" onClick={() => setManual(selected, false)} disabled={busy}>撤销手动排除</Button>
         <Button variant="ghost" size="small" onClick={() => setSelected([])}>清除选择</Button></div>}
-      {awaitingQuality ? <p className="panel-padding muted" role="status">{quality.error ? '重新读取质量报告后可显示筛选结果。' : '正在读取质量报告…'}</p> : !visible.length ? <Empty icon={Network} title={view.nodes.length ? '没有匹配的节点' : '暂无节点'}
+      {awaitingQuality ? <p className="panel-padding muted" role="status">{quality.error ? '重新读取质量记录后可显示筛选结果。' : '正在读取质量记录…'}</p> : !visible.length ? <Empty icon={Network} title={view.nodes.length ? '没有匹配的节点' : '暂无节点'}
         actions={view.nodes.length ? <Button onClick={() => { setSource('all'); setStatus('all'); setQuery(''); setAreas(''); setPreset(''); setOffset(0) }}>清除筛选</Button>
           : <ButtonLink icon={ChevronRight} page="sources">查看订阅源</ButtonLink>} />
         : <><Table className="nodes-table mobile-table" scrollLabel="当前页节点"><TableHeader><TableRow><TableHead><PageCheckbox label="选择当前页节点" checked={visible.every(row => selectedSet.has(row.key))} onCheckedChange={enabled => setSelected(enabled ? [...new Set([...selected, ...visible.map(row => row.key)])] : selected.filter(key => !visible.some(row => row.key === key)))} /></TableHead>
-          <TableHead>状态</TableHead><TableHead>整合后名称与节点属性</TableHead>{(quality.reportId || sortKey) && <TableHead>{qualitySortLabels[sortKey ?? 'https']}</TableHead>}<TableHead>保留或排除原因</TableHead><TableHead>操作</TableHead></TableRow></TableHeader><TableBody>
+          <TableHead>状态</TableHead><TableHead>整合后名称与节点属性</TableHead>{showQuality && <><TableHead>可用率</TableHead><TableHead>{qualitySortLabels[metricSort]}</TableHead><TableHead>AI 解锁</TableHead></>}<TableHead>保留或排除原因</TableHead><TableHead>操作</TableHead></TableRow></TableHeader><TableBody>
           {visible.map(row => {
             const comment = state.notes[row.key]
             const policy = state.draft.sources.find(entry => entry.id === row.sourceId)?.filter
@@ -769,7 +808,11 @@ export function NodesPage() {
                   {exit && (exit !== marked || qualityRow.exitRegionInferred) && <Badge tone={exit === marked || marked === 'unknown' ? 'neutral' : 'warning'}>
                     {marked !== 'unknown' && exit !== marked && '标称 ' + marked + ' · '}{qualityRow.exitRegionInferred ? '推定' : '实测'} {exit}</Badge>}
                   {comment?.favorite && <Star aria-label="已收藏" />}</div>{comment?.note && <small className="muted">{comment.note}</small>}</TableCell>
-              {(quality.reportId || sortKey) && <TableCell mobileLabel={qualitySortLabels[sortKey ?? 'https']}>{quality.ready ? <NodeQualityValue row={qualityRow} sort={sortKey ?? 'https'} /> : '读取中…'}</TableCell>}
+              {showQuality && <>
+                <TableCell mobileLabel="可用率">{quality.ready ? <AvailabilityReading availability={qualityRow?.availability} fallbackRate={qualityRow?.availabilityRate} infoNode={qualityRow?.infoNode} /> : '读取中…'}</TableCell>
+                <TableCell mobileLabel={qualitySortLabels[metricSort]}>{quality.ready ? <NodeQualityValue row={qualityRow} sort={metricSort} /> : '读取中…'}</TableCell>
+                <TableCell mobileLabel="AI 解锁" data-col="ai">{quality.ready ? <AiUnlockCell ai={qualityRow?.aiResults} exitRegion={qualityRow?.exitRegion} skipped={qualityRow?.aiSkipped} infoNode={qualityRow?.infoNode} /> : '读取中…'}</TableCell>
+              </>}
               <TableCell mobileLabel="筛选依据"><span className="muted">{row.reasons.length ? row.reasons.join(' · ') : policy?.keep.includes(row.region) ? '命中保留地区 · ' + regionLabel(row.region) : '符合当前筛选条件'}</span>
                 {row.collision && <div><Badge tone="danger">名称冲突</Badge></div>}
                 {!!row.duplicateCount && <small className="warning-text">精确重复 {row.duplicateCount} · {row.duplicates?.map(item => item.source).join('、')}</small>}</TableCell>
@@ -780,7 +823,7 @@ export function NodesPage() {
           })}
         </TableBody></Table>{nodes.length > 40 && <Pager offset={offset} count={nodes.length} pageSize={40} onChange={setOffset} />}</>}
     </Panel>
-    {note && <Modal title="节点收藏与备注" detail={note.row.name} onClose={() => guard.close(() => setNote(null))} footer={<><Button onClick={() => guard.close(() => setNote(null))}>取消</Button><Button variant="primary" onClick={() => saveNote(note)}>保存备注</Button></>}>
+    {note && <Modal title="节点收藏与备注" detail={note.row.name} onClose={() => { if (!busy) guard.close(() => setNote(null)) }} footer={<><Button disabled={busy} onClick={() => guard.close(() => setNote(null))}>取消</Button><Button variant="primary" busy={busy} disabled={busy} onClick={() => saveNote(note)}>保存备注</Button></>}>
       <FieldGroup><Toggle label="收藏此节点" checked={note.favorite} onChange={favorite => setNote({ ...note, favorite })} />
         <Field label="备注"><Textarea maxLength={512} value={note.text} onChange={event => setNote({ ...note, text: event.target.value })} /></Field></FieldGroup>
     </Modal>}

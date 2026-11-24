@@ -5,8 +5,9 @@ import { join, resolve } from 'node:path'
 import type { Verifier } from './core.ts'
 import type { LoadRuleSetList } from './rule-set-preview.ts'
 import { openStore } from './store.ts'
+import { cleanupLegacyQualityData } from './cleanup.ts'
 import { createAuth } from './auth.ts'
-import { createQualityService } from './quality.ts'
+import { createQualityService, qualitySpaces } from './quality.ts'
 import { createWorkspace } from './workspace.ts'
 import { createVerifier } from './core.ts'
 import { exportBackup, restoreBackup } from './backup.ts'
@@ -14,7 +15,7 @@ import { UserError } from './schema.ts'
 
 const adminBodyMax = 8 * 1024 * 1024
 const backupBodyMax = 180 * 1024 * 1024
-const contentPolicy = "default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+const contentPolicy = "default-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 const clientFiles = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/assets/app.js', ['assets/app.js', 'text/javascript; charset=utf-8']],
@@ -68,6 +69,7 @@ interface Options { directory?: string; staticPath?: string; binary?: string; pu
 export function createApplication(options: Options = {}) {
   const directory = resolve(options.directory ?? 'data')
   const store = openStore(directory)
+  cleanupLegacyQualityData(store)
   const publicUrl = options.publicUrl ? new URL(options.publicUrl) : null
   if (publicUrl && (!['http:', 'https:'].includes(publicUrl.protocol) || publicUrl.pathname !== '/' || publicUrl.username || publicUrl.password || publicUrl.search || publicUrl.hash)) {
     throw new Error('SUBMELD_PUBLIC_URL must be an HTTP(S) origin without a path.')
@@ -76,7 +78,8 @@ export function createApplication(options: Options = {}) {
   const verify = options.verify ?? createVerifier({ binary: options.binary, directory })
   const auth = createAuth(store, { password: options.password, secure })
   const workspace = createWorkspace({ store, verify, remote: { allowPrivate: options.allowPrivate, timeout: options.remoteTimeout }, tickMs: options.tickMs, loadRuleSetList: options.loadRuleSetList })
-  const quality = createQualityService(store, workspace.selectQualityNodes)
+  const quality = createQualityService(store, workspace.selectQualityNodes, () => Date.now(), workspace.selectQualityScope)
+  workspace.onTick(nowMs => quality.tick(nowMs))
   const cleanup = setInterval(() => quality.clean(), 60_000)
   cleanup.unref()
   const staticPath = resolve(options.staticPath ?? 'dist')
@@ -90,8 +93,15 @@ export function createApplication(options: Options = {}) {
     if (secure) response.setHeader('Strict-Transport-Security', 'max-age=31536000')
     try {
       const host = request.headers.host ?? ''
-      const origin = new URL((secure ? 'https://' : 'http://') + host).origin
-      const address = new URL(request.url ?? '/', origin)
+      let origin: string
+      let address: URL
+      try {
+        if (!host) throw new Error('missing host')
+        origin = new URL((secure ? 'https://' : 'http://') + host).origin
+        address = new URL(request.url ?? '/', origin)
+      } catch {
+        throw new UserError('请求地址无效。', 400)
+      }
       if (address.origin !== origin) throw new UserError('请求地址无效。', 400)
       const path = address.pathname
       const method = request.method
@@ -133,7 +143,10 @@ export function createApplication(options: Options = {}) {
         response.once('close', disconnect)
         try {
           const result = await quality.agent(action, token, payload, connection.signal)
-          if (action === 'complete') await workspace.refreshQuality(String(payload.profileId))
+          if (action === 'complete') {
+            const completed = store.get(qualitySpaces(String(payload.profileId)).jobs, String(payload.jobId))
+            await workspace.refreshQuality(String(payload.profileId), { trigger: completed?.trigger })
+          }
           if (!response.destroyed) json(response, 200, result)
           return
         } finally { response.off('close', disconnect) }
@@ -162,8 +175,11 @@ export function createApplication(options: Options = {}) {
         case 'POST /api/quality/create': result = quality.queue(workspace.profileFor(profile), body); break
         case 'POST /api/quality/pair': result = quality.pair(workspace.profileFor(profile).id, body.id, publicUrl?.origin ?? origin); break
         case 'POST /api/quality/cancel': result = quality.cancel(workspace.profileFor(profile).id, body.id); break
-        case 'GET /api/quality/snapshot': result = workspace.snapshotFor(workspace.profileFor(profile), address.searchParams.get('id') ?? undefined); break
+        case 'GET /api/quality/latest': result = quality.latest(workspace.profileFor(profile).id, address.searchParams.get('deviceId') ?? undefined); break
         case 'GET /api/quality/report': result = quality.report(workspace.profileFor(profile).id, address.searchParams.get('id')); break
+        case 'GET /api/quality/schedule': result = quality.getSchedule(workspace.profileFor(profile).id); break
+        case 'POST /api/quality/schedule': result = quality.saveSchedule(workspace.profileFor(profile).id, body); break
+        case 'POST /api/quality/schedule/run': result = quality.runSchedule(workspace.profileFor(profile), body); break
         case 'GET /api/quality/download': {
           const filename = 'submeld-quality-probe.tgz'
           const archive = await readFile(join(staticPath, 'probes', filename)).catch(() => { throw new UserError('探针下载包尚未构建，请在服务端运行 npm run build:probe。', 503) })
@@ -185,8 +201,8 @@ export function createApplication(options: Options = {}) {
         case 'POST /api/candidate': result = await workspace.candidate(profile, body.id, body.accept === true); break
         case 'POST /api/match': result = await workspace.match(profile, owner!, body); break
         case 'GET /api/provider-content': result = workspace.providerContent(profile, address.searchParams.get('id'), page, (address.searchParams.get('q') ?? '').slice(0, 500)); break
-        case 'POST /api/check': result = await workspace.check(profile, body.qualityReportId, body.expectedQualityReportId); break
-        case 'POST /api/publish': result = await workspace.publish(profile, body.revision, body.qualityReportId, body.expectedQualityReportId); break
+        case 'POST /api/check': result = await workspace.check(profile); break
+        case 'POST /api/publish': result = await workspace.publish(profile, body.revision); break
         case 'POST /api/rollback': result = await workspace.rollback(profile, body.seq); break
         case 'GET /api/current': result = workspace.current(profile); break
         case 'GET /api/history': result = workspace.history(profile, page); break
@@ -203,7 +219,10 @@ export function createApplication(options: Options = {}) {
         case 'GET /api/sources/export': result = workspace.sourceExport(profile); break
         case 'POST /api/sources/import': result = await workspace.sourceImport(profile, owner!, body); break
         case 'POST /api/backup/export': result = exportBackup(store, body.passphrase); break
-        case 'POST /api/backup/import': result = await restoreBackup(workspace, body.backup, body.passphrase, verify); break
+        case 'POST /api/backup/import':
+          result = await restoreBackup(workspace, body.backup, body.passphrase, verify)
+          quality.resetWaiters()
+          break
         case 'GET /api/download': {
           const version = workspace.activeVersion(workspace.profileFor(profile))
           if (!version) throw new UserError('请先发布配置，再下载。', 404)
@@ -223,7 +242,7 @@ export function createApplication(options: Options = {}) {
   }
   const server = createServer({ requestTimeout: 120000, headersTimeout: 20000 }, handleRequest)
   return {
-    server, workspace, handleRequest,
+    server, workspace, quality, handleRequest,
     async close() {
       clearInterval(cleanup)
       quality.close()

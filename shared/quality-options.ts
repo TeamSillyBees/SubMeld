@@ -9,13 +9,13 @@ export function aiSkipReason(row: { lossRate: number | null; httpsMedianMs: numb
   return null
 }
 export const maxQualityNodes = 1024
-export const probeProtocol = 3
+export const probeProtocol = 4
 export const probeQueueLimit = 5
 export const probePollMs = 25_000
-export const minimumProbeVersion = '1.3.0'
+export const minimumProbeVersion = '2.0.0'
 export function compatibleProbe(device: { protocolVersion?: number; agentVersion?: string }) {
   const version = device.agentVersion?.match(/^(\d+)\.(\d+)\.(\d+)$/)
-  if (!version || (device.protocolVersion !== 2 && device.protocolVersion !== probeProtocol)) return false
+  if (!version || device.protocolVersion !== probeProtocol) return false
   const minimum = minimumProbeVersion.split('.').map(Number)
   for (let i = 0; i < minimum.length; i++) {
     const difference = Number(version[i + 1]) - minimum[i]
@@ -23,9 +23,9 @@ export function compatibleProbe(device: { protocolVersion?: number; agentVersion
   }
   return true
 }
-export const qualityDefaults = { rounds: 3, concurrency: 6, bandwidth: false, speedConcurrency: 1, seconds: 5, mebibytes: 4, ai: true }
-export const surfaces = ['chatgptWeb', 'chatgptApp', 'gemini', 'claudeWeb', 'claudeApi', 'grok'] as const
+export const qualityDefaults = { basic: true, rounds: 3, concurrency: 6, bandwidth: false, speedConcurrency: 1, seconds: 5, mebibytes: 4, ai: true }
+export const surfaces = ['chatgptWeb', 'chatgptApp', 'gemini'] as const
 export type Surface = typeof surfaces[number]
 export const surfaceNames: Record<Surface, string> = {
-  chatgptWeb: 'ChatGPT Web', chatgptApp: 'ChatGPT App', gemini: 'Gemini Web', claudeWeb: 'Claude Web', claudeApi: 'Claude API', grok: 'Grok',
+  chatgptWeb: 'ChatGPT Web', chatgptApp: 'ChatGPT APP', gemini: 'Gemini Web',
 }

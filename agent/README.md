@@ -36,7 +36,7 @@ sudo submeld-probe install
 
 - 在两种系统上运行 `submeld-probe status` 可查看服务状态和开机自启状态。
 - Windows 的日志和本地报告分别位于 `%ProgramData%\SubMeldProbe\logs` 和 `%ProgramData%\SubMeldProbe\reports`。Linux 使用 `journalctl -u submeld-probe.service` 查看日志，本地报告在 `/var/lib/submeld-probe/reports/`。
-- 更新时先升级工作台，再从工作台下载探针安装包，在任务空闲时重新运行本系统的两条安装命令。探针 1.3.1 使用协议 3 上报细分判据。新版工作台也能接收 1.3.0 探针的协议 2 报告，已有配对可以沿用。
+- 更新时先升级工作台，再从工作台下载探针安装包，在任务空闲时重新运行本系统的两条安装命令。探针 2.0.0 使用协议 4 上报细分判据，需要工作台与探针同步升级，已有配对可以沿用。
 - 要更换电脑，在工作台展开常驻探针并选择「解除配对」。这台探针的待执行和运行中任务会取消。新电脑使用新的配对链接。已安装的电脑可以运行 `submeld-probe install --pair` 重新登记。Linux 安装、更新和卸载命令前加 `sudo`。
 - 卸载时先运行 `submeld-probe uninstall`，再运行 `npm uninstall --global submeld-quality-probe`。已有报告保存在数据目录。电脑离线卸载时，还需在工作台解除原配对。
 
@@ -48,7 +48,7 @@ sudo submeld-probe install
 | TLS RTT | 完成 HTTP CONNECT 后开始计时，到 TLS 握手成功为止。报告保存每轮数据及成功握手的中位数，单位为毫秒。 |
 | HTTPS 延迟 | 从建立本地代理连接到收到目标 204 响应头的耗时，汇总成功样本的中位数。失败详情区分未完成握手、握手后未收到响应头、收到其他 HTTP 状态码。 |
 | 抖动与丢包率 | 抖动取相邻成功 HTTPS 样本耗时差的绝对值均值。丢包率采用失败 HTTPS 请求数除以正式采样数。样本不足时相应指标为 `null`。 |
-| 出口 | 可用节点通过 Cloudflare trace 读取 IP 和地区，首次预算 5 秒，连接失败后可再试 3 秒，仍无结果时查询 IPinfo。缺少出口地区时，至少四个 AI 入口给出地区且所有已知地区一致，工作台才标为推定地区。原始报告保留实际采集到的 IP。 |
+| 出口 | 可用节点通过 Cloudflare trace 读取 IP 和地区，首次预算 5 秒，连接失败后可再试 3 秒，仍无结果时查询 IPinfo。缺少出口地区时，至少两个 AI 入口给出地区且所有已知地区一致，工作台才标为推定地区。原始报告保留实际采集到的 IP。 |
 | 下载 | 在延迟阶段结束后，使用 1–2 路并发从 Cloudflare Speed Test 流式下载。读取响应正文达到字节上限或总耗时达到上限即关闭流。平均速度包含建连，最高速度取各时段速率的最大值，最后不足一秒按实际时长计算。 |
 | 流量 | `speed.bytes` 是已读取的下载正文。TLS 与代理协议开销、延迟采样、出口查询和 AI 探测会产生额外网络流量。 |
 
@@ -56,12 +56,10 @@ sudo submeld-probe install
 
 探针使用 Impit 逐节点访问公开入口。同一出口 IP 下的线路依次测量，各自保存结果。不同出口最多并行检测 6 路，每条隧道最多同时发出 2 个请求。丢包率达到 50% 或 HTTPS 中位延迟达到 4 秒时跳过 AI 检测，流量和到期提示条目在启动核心前跳过。[Impit 协议客户端](https://github.com/apify/impit)
 
-平台 trace 首次预算 5 秒，断连或超时后可再试 3 秒。仍缺少该站点地区时，只有至少两个其他域名的地区与通用出口一致，且本节点所有已知观测均一致，才能在未决 403 上参考出口地区。详情标注推定依据，报告的 `providerRegion` 保留原始观测。
+平台 trace 首次预算 5 秒，断连或超时后可再试 3 秒。仍缺少该站点地区时，只有至少一个其他域名的地区与通用出口一致，且本节点所有已知观测均一致，才能在未决 403 上参考出口地区。详情标注推定依据，报告的 `providerRegion` 保留原始观测。
 
 - **ChatGPT** 分别记录合规接口和移动网关。移动网关返回 403 时，只有命中已知的未签名网关 JSON 提示才记为入口可达。地区拒绝、机房限制和浏览器验证各有独立判据。[ChatGPT 支持地区](https://help.openai.com/en/articles/7947663-chatgpt-supported-countries)
 - **Gemini Web** 测量个人账号的网页入口。探针最多跟随一次同域 `/app` 跳转，读到产品标题和 Google 地区标记后即停止下载。异常流量验证和同意页分别记录。Gemini API 的可用地区由 Google 单独列出。[网页版支持地区](https://support.google.com/gemini/answer/13575153?hl=en) · [API 支持地区](https://ai.google.dev/gemini-api/docs/available-regions)
-- **Claude** 分别检查 Web 首页与 Models API。API 返回缺少密钥的 401、Web 跳转到官方登录页时记为入口可达。官方地区不可用页记为地区受限。[Claude API 错误说明](https://platform.claude.com/docs/en/api/errors)
-- **Grok** 优先记录源站明确的地区拒绝、IP 封禁和限频。403 命中审计地区表时，详情标明地区表推断。香港和新加坡的验证页保留浏览器验证判据。未识别的普通 403 保留待确认状态。[Grok 官方使用说明](https://x.ai/legal/faq) · [Cloudflare 挑战响应](https://developers.cloudflare.com/cloudflare-challenges/challenge-types/challenge-pages/detect-response/)
 
 全入口可达、部分入口可达、需要浏览器验证、地区受限、封禁或连接失败分别计 3、2、1、0、−1 分。Web 遇到验证而 API 可达时记 2 分。地区受限加浏览器验证记 0 分。可达与地区受限并存时，保留各入口读数并将平台等级留空。
 

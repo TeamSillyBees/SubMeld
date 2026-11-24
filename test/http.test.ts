@@ -2,15 +2,20 @@ import type { AddressInfo } from 'node:net'
 import type { Endpoint, LocalInput, Payload, ResponseFor } from '../src/api.ts'
 import type { Group, MihomoConfig, Projection, Service, WorkspaceState } from '../shared/model.ts'
 import assert from 'node:assert/strict'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { once } from 'node:events'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
+import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
 import { test } from 'node:test'
 import { parse, stringify } from 'yaml'
 import { defaultFilter } from '../shared/catalog.ts'
+import { poolCondition } from '../shared/group-filter.ts'
+import { defaultQualityScheduleConfig, qualityDefaults, surfaces, type AiResults, type Assignment, type DevicePairing, type QualityRow, type QualityScheduleConfig, type ScheduleRunResult } from '../shared/quality.ts'
+import { minimumProbeVersion, probeProtocol } from '../shared/quality-options.ts'
 import { createApplication } from '../server/http.ts'
 import { download } from '../server/remote.ts'
 import { refreshWorkspace } from '../src/workspace-sync.ts'
@@ -415,4 +420,484 @@ test('authentication, isolated source drafts, scheduled publishing, failure reco
   app = createApplication({ directory, allowPrivate: true, tickMs: 0 })
   const restarted = await listen(app.server)
   assert.equal(await (await fetch(restarted + restoredLink.pathname)).text(), firstYaml)
+})
+
+test('GET /api/quality/latest, incremental agent/complete linkage to /sub/:token, and removed snapshot route', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'submeld-http-quality-latest-'))
+  const app = createApplication({ directory, tickMs: 0, password: admin, verify: async () => null })
+  const root = await listen(app.server)
+  t.after(async () => {
+    await app.close()
+    await rm(directory, { recursive: true, force: true })
+  })
+
+  // Unauthenticated check
+  assert.equal((await fetch(root + '/api/quality/latest')).status, 401)
+  const login = await fetch(root + '/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: admin }),
+  })
+  const cookie = login.headers.get('set-cookie')!.split(';')[0]
+  const authed = (path: string, body?: unknown) => fetch(root + path, body === undefined
+    ? { headers: { Cookie: cookie } }
+    : { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+
+  assert.equal((await authed('/api/quality/snapshot')).status, 404)
+  assert.deepEqual(await (await authed('/api/quality/latest')).json(), {})
+  assert.equal((await authed('/api/quality/latest?deviceId=invalid-uuid')).status, 400)
+
+  // Setup local nodes + probe + dynamic group
+  const state0 = await (await authed('/api/state')).json() as WorkspaceState
+  const source = { id: 'local-q-1', local: true, name: 'Local', tag: '', url: '', enabled: true, paused: false, minutes: 60, filter: defaultFilter }
+  const draftRes = await authed('/api/draft', {
+    revision: state0.revision,
+    draft: { ...state0.draft, sources: [source] },
+    localNodes: { [source.id]: [proxy('Node-A', 8001), proxy('Node-B', 8002)] },
+  })
+  assert.equal(draftRes.status, 200)
+  const savedDraft = await draftRes.json() as WorkspaceState
+  const keys = savedDraft.sources[source.id].good!.nodes.map(n => source.id + '/' + n.id)
+
+  const invite = await (await authed('/api/quality/invite', {})).json() as DevicePairing
+  const [, profileId, ticket] = new URL(invite.pairing).hash.slice(1).split('.')
+  const secret = randomBytes(32).toString('base64url')
+  const worker = randomBytes(32).toString('base64url')
+  const capabilities = { agentVersion: minimumProbeVersion, protocolVersion: probeProtocol, localRegion: 'JP', localIsp: 'ISP', ipStack: 'dual', mihomoVersion: '1.0' }
+  const agentPost = (action: string, bearer: string, payload: unknown) => fetch(root + '/api/quality/agent/' + action, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + bearer, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  assert.equal((await agentPost('enroll', ticket, { profileId, name: 'HTTP Probe', platform: 'linux', secret, capabilities })).status, 200)
+  const devices = await (await authed('/api/quality/devices')).json() as Array<{ id: string }>
+  const deviceId = devices[0].id
+
+  const withGroup = await (await authed('/api/draft', {
+    revision: savedDraft.revision,
+    draft: {
+      ...savedDraft.draft,
+      groups: [{
+        id: 'grp-ai-01',
+        name: 'AI Group',
+        type: 'select',
+        enabled: true,
+        qualityDeviceId: deviceId,
+        members: [poolCondition({ quality: { aiAll: true, minAvailability: 0.5, untestedPolicy: 'include' } })],
+      }],
+    },
+  })).json() as WorkspaceState
+  await authed('/api/publish', { revision: withGroup.revision })
+  const subUrl = (await (await authed('/api/link')).json() as { url: string }).url
+  const initialConfig = parse(await (await fetch(subUrl)).text()) as MihomoConfig
+  assert.deepEqual(initialConfig['proxy-groups'][0].proxies, ['Node-A', 'Node-B'])
+
+  // 1. Run basic: true, ai: false (Node-A available, Node-B unavailable)
+  const q1 = await (await authed('/api/quality/queue', {
+    targetDeviceId: deviceId,
+    keys,
+    config: { ...qualityDefaults, basic: true, bandwidth: false, ai: false, rounds: 2 },
+  })).json() as { id: string; createdAt: string }
+  const a1 = await (await agentPost('poll', secret, { profileId, worker, capabilities })).json() as Assignment
+  assert.equal(a1.jobId, q1.id)
+  const basicRows: QualityRow[] = [
+    { key: keys[0], available: true, error: null, samples: [{ tlsMs: 10, httpsMs: 40 }, { tlsMs: 12, httpsMs: 44 }], tlsMedianMs: 11, httpsMedianMs: 42, jitterMs: 4, lossRate: 0, exit: { ip: '192.0.2.1', region: 'JP' }, speed: null, ai: null },
+    { key: keys[1], available: false, error: 'no_response', samples: [{ tlsMs: null, httpsMs: null }, { tlsMs: null, httpsMs: null }], tlsMedianMs: null, httpsMedianMs: null, jitterMs: null, lossRate: 1, exit: null, speed: null, ai: null },
+  ]
+  assert.equal((await agentPost('complete', worker, {
+    profileId, jobId: q1.id,
+    report: { schemaVersion: 1, jobId: q1.id, startedAt: q1.createdAt, finishedAt: new Date().toISOString(), results: basicRows },
+  })).status, 200)
+
+  // 2. Run basic: false, ai: true (Node-A passes all AI, Node-B fails) -> refreshQuality auto-publishes & updates /sub/:token
+  const okAi: AiResults = Object.fromEntries(surfaces.map(s => [s, {
+    state: 'reachable', evidence: 'web_entry', httpStatus: 200, needsReview: false, providerRegion: 'JP',
+  }])) as AiResults
+  const downAi: AiResults = Object.fromEntries(surfaces.map(s => [s, {
+    state: 'region_restricted', evidence: 'region_denied', httpStatus: 403, needsReview: false, providerRegion: null,
+  }])) as AiResults
+  const q2 = await (await authed('/api/quality/queue', {
+    targetDeviceId: deviceId,
+    keys,
+    config: { ...qualityDefaults, basic: false, bandwidth: false, ai: true },
+  })).json() as { id: string; createdAt: string }
+  const a2 = await (await agentPost('poll', secret, { profileId, worker, capabilities })).json() as Assignment
+  assert.equal(a2.jobId, q2.id)
+  const aiRows: QualityRow[] = [
+    { key: keys[0], available: true, error: null, samples: [], tlsMedianMs: null, httpsMedianMs: null, jitterMs: null, lossRate: null, exit: null, speed: null, ai: okAi },
+    { key: keys[1], available: true, error: null, samples: [], tlsMedianMs: null, httpsMedianMs: null, jitterMs: null, lossRate: null, exit: null, speed: null, ai: downAi },
+  ]
+  assert.equal((await agentPost('complete', worker, {
+    profileId, jobId: q2.id,
+    report: { schemaVersion: 1, jobId: q2.id, startedAt: q2.createdAt, finishedAt: new Date().toISOString(), results: aiRows },
+  })).status, 200)
+
+  const latestAll = await (await authed('/api/quality/latest')).json() as Record<string, Record<string, { basic: { httpsMs: number | null } | null; ai: { results: AiResults | null } | null; availability: { rate: number; total: number } | null }>>
+  assert.equal(latestAll[deviceId][keys[0]].basic?.httpsMs, 42)
+  assert.equal(latestAll[deviceId][keys[0]].ai?.results?.chatgptWeb.state, 'reachable')
+  assert.equal(latestAll[deviceId][keys[0]].availability?.rate, 1)
+  assert.equal(latestAll[deviceId][keys[1]].availability?.rate, 0)
+  assert.equal(latestAll[deviceId][keys[1]].availability?.total, 1)
+
+  const latestScoped = await (await authed(`/api/quality/latest?deviceId=${deviceId}`)).json() as Record<string, unknown>
+  assert.deepEqual(Object.keys(latestScoped).sort(), [...keys].sort())
+  assert.deepEqual(await (await authed(`/api/quality/latest?deviceId=${randomUUID()}`)).json(), {})
+
+  // /sub/:token reflects auto-published version with Node-A only
+  const updatedConfig = parse(await (await fetch(subUrl)).text()) as MihomoConfig
+  assert.deepEqual(updatedConfig['proxy-groups'][0].proxies, ['Node-A'])
+
+  // Profile isolation
+  const secondProfile = await (await authed('/api/profiles', { action: 'create', title: 'Empty' })).json() as WorkspaceState
+  assert.deepEqual(await (await authed(`/api/quality/latest?profile=${secondProfile.id}`)).json(), {})
+})
+
+test('HTTP quality schedule CRUD, /api/quality/schedule/run with mock timers, and dynamic group autoRefreshGroups linkage', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'submeld-http-quality-schedule-'))
+  const app = createApplication({ directory, tickMs: 0, password: admin, verify: async () => null })
+  const root = await listen(app.server)
+  t.after(async () => {
+    t.mock.timers.reset()
+    await app.close()
+    await rm(directory, { recursive: true, force: true })
+  })
+
+  // Unauthenticated checks
+  assert.equal((await fetch(root + '/api/quality/schedule')).status, 401)
+  assert.equal((await fetch(root + '/api/quality/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401)
+  assert.equal((await fetch(root + '/api/quality/schedule/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status, 401)
+
+  const login = await fetch(root + '/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: admin }),
+  })
+  const cookie = login.headers.get('set-cookie')!.split(';')[0]
+  const authed = (path: string, body?: unknown) => fetch(root + path, body === undefined
+    ? { headers: { Cookie: cookie } }
+    : { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const agentPost = (action: string, bearer: string, payload: unknown) => fetch(root + '/api/quality/agent/' + action, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + bearer, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  // Default schedule
+  assert.deepEqual(await (await authed('/api/quality/schedule')).json(), defaultQualityScheduleConfig)
+
+  // Validation errors (400 invalid payload, 404 unknown device)
+  assert.equal((await authed('/api/quality/schedule', { ...defaultQualityScheduleConfig, basic: { ...defaultQualityScheduleConfig.basic, intervalMinutes: 0 } })).status, 400)
+  assert.equal((await authed('/api/quality/schedule', { ...defaultQualityScheduleConfig, targetDeviceId: randomUUID() })).status, 404)
+  assert.equal((await authed('/api/quality/schedule/run', { kind: 'unknown' })).status, 400)
+  assert.equal((await authed('/api/quality/schedule/run', { kind: 'basic' })).status, 422)
+
+  // Setup local nodes + v4 probe + dynamic group + publish
+  const state0 = await (await authed('/api/state')).json() as WorkspaceState
+  const source = { id: 'local-sched-1', local: true, name: 'Local', tag: '', url: '', enabled: true, paused: false, minutes: 60, filter: defaultFilter }
+  const savedDraft = await (await authed('/api/draft', {
+    revision: state0.revision,
+    draft: { ...state0.draft, sources: [source] },
+    localNodes: { [source.id]: [proxy('Node-A', 8101), proxy('Node-B', 8102)] },
+  })).json() as WorkspaceState
+  const keys = savedDraft.sources[source.id].good!.nodes.map(n => source.id + '/' + n.id)
+
+  const invite = await (await authed('/api/quality/invite', {})).json() as DevicePairing
+  const [, profileId, ticket] = new URL(invite.pairing).hash.slice(1).split('.')
+  const secret = randomBytes(32).toString('base64url')
+  const worker = randomBytes(32).toString('base64url')
+  const capabilities = { agentVersion: minimumProbeVersion, protocolVersion: probeProtocol, localRegion: 'JP', localIsp: 'ISP', ipStack: 'dual', mihomoVersion: '1.0' }
+  assert.equal((await agentPost('enroll', ticket, { profileId, name: 'Sched Probe', platform: 'linux', secret, capabilities })).status, 200)
+  const deviceId = ((await (await authed('/api/quality/devices')).json()) as Array<{ id: string }>)[0].id
+
+  const withGroup = await (await authed('/api/draft', {
+    revision: savedDraft.revision,
+    draft: {
+      ...savedDraft.draft,
+      groups: [{
+        id: 'grp-sched-01',
+        name: 'Sched Group',
+        type: 'select',
+        enabled: true,
+        qualityDeviceId: deviceId,
+        members: [poolCondition({ quality: { maxLatencyMs: 200, aiAll: true, untestedPolicy: 'include' } })],
+      }],
+    },
+  })).json() as WorkspaceState
+  await authed('/api/publish', { revision: withGroup.revision })
+  const subUrl = (await (await authed('/api/link')).json() as { url: string }).url
+  assert.deepEqual((parse(await (await fetch(subUrl)).text()) as MihomoConfig)['proxy-groups'][0].proxies, ['Node-A', 'Node-B'])
+
+  // Save schedule & verify profile isolation
+  const withProfile = (path: string) => path + (path.includes('?') ? '&' : '?') + 'profile=' + encodeURIComponent(profileId)
+  const authedP = (path: string, body?: unknown) => authed(withProfile(path), body)
+  const savedSchedule = await (await authedP('/api/quality/schedule', {
+    targetDeviceId: deviceId,
+    scope: 'kept',
+    autoRefreshGroups: true,
+    basic: { enabled: true, intervalMinutes: 60, rounds: 2, concurrency: 6, bandwidth: false },
+    ai: { enabled: true, intervalMinutes: 180, concurrency: 4 },
+  })).json() as QualityScheduleConfig
+  assert.equal(savedSchedule.targetDeviceId, deviceId)
+  assert.deepEqual(await (await authedP('/api/quality/schedule')).json(), savedSchedule)
+
+  const secondProfile = await (await authedP('/api/profiles', { action: 'create', title: 'Other' })).json() as WorkspaceState
+  assert.deepEqual(await (await authed(`/api/quality/schedule?profile=${secondProfile.id}`)).json(), defaultQualityScheduleConfig)
+
+  // Enable mock timers right after setup (tests server/quality.ts () => Date.now() fix!)
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
+
+  // Trigger basic run via HTTP
+  const runBasicRes = await authedP('/api/quality/schedule/run', { kind: 'basic' })
+  assert.equal(runBasicRes.status, 200)
+  const runBasic = await runBasicRes.json() as ScheduleRunResult
+  assert.equal(runBasic.jobs.length, 1)
+  assert.equal(runBasic.jobs[0].trigger, 'schedule')
+  assert.equal(runBasic.jobs[0].scheduleKind, 'basic')
+  assert.equal(runBasic.schedule.basic.lastJobId, runBasic.jobs[0].id)
+  const assignBasic = await (await agentPost('poll', secret, { profileId, worker, capabilities })).json() as Assignment
+  assert.equal(assignBasic.jobId, runBasic.jobs[0].id)
+  assert.equal(assignBasic.config.basic, true)
+  assert.equal(assignBasic.config.ai, false)
+
+  // Trigger AI run via HTTP
+  const runAiRes = await authedP('/api/quality/schedule/run', { kind: 'ai' })
+  assert.equal(runAiRes.status, 200)
+  const runAi = await runAiRes.json() as ScheduleRunResult
+  assert.equal(runAi.jobs.length, 1)
+  assert.equal(runAi.jobs[0].trigger, 'schedule')
+  assert.equal(runAi.jobs[0].scheduleKind, 'ai')
+  assert.equal(runAi.schedule.ai.lastJobId, runAi.jobs[0].id)
+
+  // Complete basic (Node-A fast 40ms, Node-B unavailable)
+  const basicRows1: QualityRow[] = [
+    { key: keys[0], available: true, error: null, samples: [{ tlsMs: 10, httpsMs: 40 }, { tlsMs: 12, httpsMs: 40 }], tlsMedianMs: 11, httpsMedianMs: 40, jitterMs: 0, lossRate: 0, exit: { ip: '192.0.2.1', region: 'JP' }, speed: null, ai: null },
+    { key: keys[1], available: false, error: 'no_response', samples: [{ tlsMs: null, httpsMs: null }, { tlsMs: null, httpsMs: null }], tlsMedianMs: null, httpsMedianMs: null, jitterMs: null, lossRate: 1, exit: null, speed: null, ai: null },
+  ]
+  assert.equal((await agentPost('complete', worker, {
+    profileId, jobId: assignBasic.jobId,
+    report: { schemaVersion: 1, jobId: assignBasic.jobId, startedAt: runBasic.jobs[0].createdAt, finishedAt: new Date().toISOString(), results: basicRows1 },
+  })).status, 200)
+
+  // Poll & complete AI (Node-A passes all AI, Node-B passes all AI too so Node-B only fails latency/availability)
+  const okAi: AiResults = Object.fromEntries(surfaces.map(s => [s, {
+    state: 'reachable', evidence: 'web_entry', httpStatus: 200, needsReview: false, providerRegion: 'JP',
+  }])) as AiResults
+  const assignAi = await (await agentPost('poll', secret, { profileId, worker, capabilities })).json() as Assignment
+  assert.equal(assignAi.jobId, runAi.jobs[0].id)
+  assert.equal(assignAi.config.basic, false)
+  assert.equal(assignAi.config.ai, true)
+  const aiRows: QualityRow[] = [
+    { key: keys[0], available: true, error: null, samples: [], tlsMedianMs: null, httpsMedianMs: null, jitterMs: null, lossRate: null, exit: null, speed: null, ai: okAi },
+    { key: keys[1], available: true, error: null, samples: [], tlsMedianMs: null, httpsMedianMs: null, jitterMs: null, lossRate: null, exit: null, speed: null, ai: okAi },
+  ]
+  assert.equal((await agentPost('complete', worker, {
+    profileId, jobId: assignAi.jobId,
+    report: { schemaVersion: 1, jobId: assignAi.jobId, startedAt: runAi.jobs[0].createdAt, finishedAt: new Date().toISOString(), results: aiRows },
+  })).status, 200)
+
+  // autoRefreshGroups: true -> auto-published 'auto' version with ['Node-A']
+  const historyAfterFirst = await (await authedP('/api/history')).json() as Array<{ kind: string }>
+  assert.equal(historyAfterFirst[0].kind, 'auto')
+  assert.deepEqual((parse(await (await fetch(subUrl)).text()) as MihomoConfig)['proxy-groups'][0].proxies, ['Node-A'])
+
+  // Advance 61 minutes -> POST /api/quality/schedule/run { kind: 'due' } triggers basic ONLY (ai not due until 180m)
+  t.mock.timers.tick(61 * 60_000)
+  // Keep probe online in mocked time
+  await agentPost('poll', secret, { profileId, worker, capabilities })
+  const dueRun = await (await authedP('/api/quality/schedule/run', { kind: 'due' })).json() as ScheduleRunResult
+  assert.equal(dueRun.jobs.length, 1)
+  assert.equal(dueRun.jobs[0].scheduleKind, 'basic')
+  assert.deepEqual(dueRun.skipped, [{ kind: 'ai', reason: 'not_due' }])
+
+  // Update schedule to autoRefreshGroups: false (must preserve lastRunAt/lastJobId!)
+  const disabledAuto = await (await authedP('/api/quality/schedule', {
+    targetDeviceId: deviceId,
+    scope: 'kept',
+    autoRefreshGroups: false,
+    basic: { enabled: true, intervalMinutes: 60, rounds: 2, concurrency: 6, bandwidth: false },
+    ai: { enabled: true, intervalMinutes: 180, concurrency: 4 },
+  })).json() as QualityScheduleConfig
+  assert.equal(disabledAuto.autoRefreshGroups, false)
+  assert.equal(disabledAuto.basic.lastJobId, dueRun.jobs[0].id)
+  assert.equal(disabledAuto.ai.lastJobId, runAi.jobs[0].id)
+
+  // Complete the scheduled basic job with flipped results (Node-A fails, Node-B fast 50ms)
+  const assignDueBasic = await (await agentPost('poll', secret, { profileId, worker, capabilities })).json() as Assignment
+  assert.equal(assignDueBasic.jobId, dueRun.jobs[0].id)
+  const basicRows2: QualityRow[] = [
+    { key: keys[0], available: false, error: 'no_response', samples: [{ tlsMs: null, httpsMs: null }, { tlsMs: null, httpsMs: null }], tlsMedianMs: null, httpsMedianMs: null, jitterMs: null, lossRate: 1, exit: null, speed: null, ai: null },
+    { key: keys[1], available: true, error: null, samples: [{ tlsMs: 12, httpsMs: 50 }, { tlsMs: 14, httpsMs: 50 }], tlsMedianMs: 13, httpsMedianMs: 50, jitterMs: 0, lossRate: 0, exit: { ip: '192.0.2.2', region: 'JP' }, speed: null, ai: null },
+  ]
+  assert.equal((await agentPost('complete', worker, {
+    profileId, jobId: assignDueBasic.jobId,
+    report: { schemaVersion: 1, jobId: assignDueBasic.jobId, startedAt: dueRun.jobs[0].createdAt, finishedAt: new Date().toISOString(), results: basicRows2 },
+  })).status, 200)
+
+  // Latest store updated, but /sub/:token & history did NOT auto-publish because autoRefreshGroups: false
+  const latestNow = await (await authedP(`/api/quality/latest?deviceId=${deviceId}`)).json() as Record<string, { basic: { available: boolean } | null }>
+  assert.equal(latestNow[keys[0]].basic?.available, false)
+  assert.equal(latestNow[keys[1]].basic?.available, true)
+  const historyAfterSkipped = await (await authedP('/api/history')).json() as Array<{ kind: string }>
+  assert.equal(historyAfterSkipped.length, historyAfterFirst.length)
+  assert.deepEqual((parse(await (await fetch(subUrl)).text()) as MihomoConfig)['proxy-groups'][0].proxies, ['Node-A'])
+
+  // Manual run STILL auto-publishes even when schedule.autoRefreshGroups === false
+  const manualJob = await (await authedP('/api/quality/queue', {
+    targetDeviceId: deviceId,
+    keys,
+    config: { ...qualityDefaults, basic: true, bandwidth: false, ai: false, rounds: 2 },
+  })).json() as { id: string; createdAt: string }
+  const assignManual = await (await agentPost('poll', secret, { profileId, worker, capabilities })).json() as Assignment
+  assert.equal(assignManual.jobId, manualJob.id)
+  assert.equal((await agentPost('complete', worker, {
+    profileId, jobId: manualJob.id,
+    report: { schemaVersion: 1, jobId: manualJob.id, startedAt: manualJob.createdAt, finishedAt: new Date().toISOString(), results: basicRows2 },
+  })).status, 200)
+  const historyAfterManual = await (await authedP('/api/history')).json() as Array<{ kind: string }>
+  assert.equal(historyAfterManual.length, historyAfterFirst.length + 1)
+  assert.deepEqual((parse(await (await fetch(subUrl)).text()) as MihomoConfig)['proxy-groups'][0].proxies, ['Node-B'])
+
+  // Advance another 120 minutes (total +181m since AI run) -> app.workspace.tick() dispatches due AI job via onTick listener
+  t.mock.timers.tick(120 * 60_000)
+  await agentPost('poll', secret, { profileId, worker, capabilities })
+  app.workspace.tick(Date.now())
+  const waitingJobs = app.quality.list(profileId).filter(j => j.status === 'waiting')
+  assert.ok(waitingJobs.some(j => j.scheduleKind === 'ai' && !j.config.basic && j.config.ai))
+  assert.ok(waitingJobs.some(j => j.scheduleKind === 'basic' && j.config.basic && !j.config.ai))
+})
+
+test('HTTP security hardening (GET / CSP, malformed/missing Host 400, SSRF variants), restoreBackup poll wake, and complete + publish concurrency', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'submeld-http-hardening-'))
+  const staticPath = await mkdtemp(join(tmpdir(), 'submeld-http-static-'))
+  await writeFile(join(staticPath, 'index.html'), '<!doctype html><html><head><meta property="csp-nonce" nonce="SUBMELD_STYLE_NONCE"></head><body>ok</body></html>')
+  const app = createApplication({ directory, staticPath, tickMs: 0, password: admin, verify: async () => null })
+  const root = await listen(app.server)
+  const port = (app.server.address() as AddressInfo).port
+  const redirectOrigin = createServer((_, res) => {
+    res.writeHead(302, { Location: 'http://127.0.0.1:' + port + '/' }).end()
+  })
+  const redirectUrl = await listen(redirectOrigin)
+  t.after(async () => {
+    await app.close()
+    await new Promise(resolve => redirectOrigin.close(resolve))
+    await rm(directory, { recursive: true, force: true })
+    await rm(staticPath, { recursive: true, force: true })
+  })
+
+  // 1. GET / CSP includes script-src 'self' and style-src 'self' 'nonce-...' matching HTML meta nonce
+  const indexRes = await fetch(root + '/')
+  assert.equal(indexRes.status, 200)
+  const csp = indexRes.headers.get('content-security-policy') ?? ''
+  const html = await indexRes.text()
+  const nonceMatch = /nonce="([^"]+)"/.exec(html)
+  assert.ok(nonceMatch && nonceMatch[1] !== 'SUBMELD_STYLE_NONCE')
+  assert.match(csp, /script-src 'self'/)
+  assert.ok(csp.includes(`style-src 'self' 'nonce-${nonceMatch[1]}'`))
+
+  // 2. Malformed or missing Host header returns HTTP 400 (never 500)
+  const rawRequest = (raw: string) => new Promise<string>((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1', () => socket.write(raw))
+    let data = ''
+    socket.setEncoding('utf8')
+    socket.on('data', chunk => { data += chunk })
+    socket.on('end', () => resolve(data))
+    socket.on('error', reject)
+  })
+  const malformedHostRaw = await rawRequest('GET /api/session HTTP/1.1\r\nHost: invalid host with spaces\r\nConnection: close\r\n\r\n')
+  assert.match(malformedHostRaw, /^HTTP\/1\.1 400 /)
+  const missingHostRaw = await rawRequest('GET /api/session HTTP/1.0\r\nConnection: close\r\n\r\n')
+  assert.match(missingHostRaw, /^HTTP\/1\.1 400 /)
+
+  // 3. SSRF variants blocked (IPv4-mapped IPv6 loopback, CGNAT 100.64.0.1, octal loopback, and 302 redirect to loopback)
+  await assert.rejects(download('http://[::ffff:127.0.0.1]/sub'), /指向内网/)
+  await assert.rejects(download('http://100.64.0.1/sub'), /指向内网/)
+  await assert.rejects(download('http://0177.0.0.1/sub'), /指向内网/)
+  await assert.rejects(download(redirectUrl + '/sub', { allowPrivate: false }), /指向内网/)
+
+  // 4. restoreBackup() immediately wakes active wait: true agent/poll returning 403
+  const login = await fetch(root + '/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: admin }),
+  })
+  const cookie = login.headers.get('set-cookie')!.split(';')[0]
+  const authed = (path: string, body?: unknown) => fetch(root + path, body === undefined
+    ? { headers: { Cookie: cookie } }
+    : { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const agentPost = (action: string, bearer: string, payload: unknown) => fetch(root + '/api/quality/agent/' + action, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + bearer, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  const emptyBackup = await (await authed('/api/backup/export', { passphrase: 'restore wake secret' })).json()
+  const state0 = await (await authed('/api/state')).json() as WorkspaceState
+  const source = { id: 'local-conc-1', local: true, name: 'Local', tag: '', url: '', enabled: true, paused: false, minutes: 60, filter: defaultFilter }
+  const savedDraft = await (await authed('/api/draft', {
+    revision: state0.revision,
+    draft: { ...state0.draft, sources: [source] },
+    localNodes: { [source.id]: [proxy('Node-C1', 8201), proxy('Node-C2', 8202)] },
+  })).json() as WorkspaceState
+  const keys = savedDraft.sources[source.id].good!.nodes.map(n => source.id + '/' + n.id)
+
+  const invite = await (await authed('/api/quality/invite', {})).json() as DevicePairing
+  const [, profileId, ticket] = new URL(invite.pairing).hash.slice(1).split('.')
+  const secret = randomBytes(32).toString('base64url')
+  const worker = randomBytes(32).toString('base64url')
+  const capabilities = { agentVersion: minimumProbeVersion, protocolVersion: probeProtocol, localRegion: 'JP', localIsp: 'ISP', ipStack: 'dual', mihomoVersion: '1.0' }
+  assert.equal((await agentPost('enroll', ticket, { profileId, name: 'Conc Probe', platform: 'linux', secret, capabilities })).status, 200)
+  const deviceId = ((await (await authed('/api/quality/devices')).json()) as Array<{ id: string }>)[0].id
+
+  const pollStart = Date.now()
+  const waitingPoll = agentPost('poll', secret, { profileId, worker, wait: true, capabilities })
+  await setTimeout(50)
+  const restoreRes = await authed('/api/backup/import', { passphrase: 'restore wake secret', backup: emptyBackup })
+  assert.equal(restoreRes.status, 200)
+  const wokenPoll = await waitingPoll
+  assert.equal(wokenPoll.status, 403)
+  assert.ok(Date.now() - pollStart < 3000, 'active long-poll must wake promptly after restoreBackup')
+
+  // 5. complete + publish concurrency after re-enrolling a device and saving draft
+  const afterRestore = await (await authed('/api/state')).json() as WorkspaceState
+  const draft2 = await (await authed('/api/draft', {
+    revision: afterRestore.revision,
+    draft: { ...afterRestore.draft, sources: [source] },
+    localNodes: { [source.id]: [proxy('Node-C1', 8201), proxy('Node-C2', 8202)] },
+  })).json() as WorkspaceState
+  const keys2 = draft2.sources[source.id].good!.nodes.map(n => source.id + '/' + n.id)
+  const invite2 = await (await authed('/api/quality/invite', {})).json() as DevicePairing
+  const [, profileId2, ticket2] = new URL(invite2.pairing).hash.slice(1).split('.')
+  assert.equal((await agentPost('enroll', ticket2, { profileId: profileId2, name: 'Conc Probe 2', platform: 'linux', secret, capabilities })).status, 200)
+  const deviceId2 = ((await (await authed('/api/quality/devices')).json()) as Array<{ id: string }>)[0].id
+  const withPool = await (await authed('/api/draft', {
+    revision: draft2.revision,
+    draft: {
+      ...draft2.draft,
+      groups: [{
+        id: 'grp-conc-1', name: 'Conc Group', type: 'select', enabled: true, qualityDeviceId: deviceId2,
+        members: [poolCondition({ quality: { maxLatencyMs: 200, untestedPolicy: 'include' } })],
+      }],
+    },
+  })).json() as WorkspaceState
+  const qConc = await (await authed('/api/quality/queue', {
+    targetDeviceId: deviceId2, keys: keys2, config: { ...qualityDefaults, basic: true, bandwidth: false, ai: false, rounds: 2 },
+  })).json() as { id: string; createdAt: string }
+  const aConc = await (await agentPost('poll', secret, { profileId: profileId2, worker, capabilities })).json() as Assignment
+  assert.equal(aConc.jobId, qConc.id)
+
+  const concRows: QualityRow[] = [
+    { key: keys2[0], available: true, error: null, samples: [{ tlsMs: 10, httpsMs: 40 }, { tlsMs: 12, httpsMs: 42 }], tlsMedianMs: 11, httpsMedianMs: 41, jitterMs: 2, lossRate: 0, exit: { ip: '192.0.2.1', region: 'JP' }, speed: null, ai: null },
+    { key: keys2[1], available: false, error: 'no_response', samples: [{ tlsMs: null, httpsMs: null }, { tlsMs: null, httpsMs: null }], tlsMedianMs: null, httpsMedianMs: null, jitterMs: null, lossRate: 1, exit: null, speed: null, ai: null },
+  ]
+  const [completeRes, publishRes] = await Promise.all([
+    agentPost('complete', worker, {
+      profileId: profileId2, jobId: qConc.id,
+      report: { schemaVersion: 1, jobId: qConc.id, startedAt: qConc.createdAt, finishedAt: new Date().toISOString(), results: concRows },
+    }),
+    authed('/api/publish', { revision: withPool.revision }),
+  ])
+  assert.equal(completeRes.status, 200)
+  assert.equal(publishRes.status, 200)
+  const finalState = await (await authed('/api/state')).json() as WorkspaceState
+  assert.ok(finalState.current)
 })

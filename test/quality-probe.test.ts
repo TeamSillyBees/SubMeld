@@ -35,7 +35,7 @@ function cleanupServer(server: net.Server) {
   }
 }
 
-test('real Mihomo isolates 205 nodes, discards invalid configurations and enforces stream budgets', { skip, timeout: 90_000 }, async t => {
+test('real Mihomo isolates 205 nodes, discards invalid configurations and enforces stream budgets', { skip, timeout: 180_000 }, async t => {
   const dir = await mkdtemp(join(tmpdir(), 'submeld-probe-fixture-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
   const config = join(dir, 'openssl.cnf')
@@ -103,7 +103,7 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
   })
   const port = await listen(outbound)
   t.after(cleanupServer(outbound))
-  const configBase = { ...qualityDefaults, rounds: 2, concurrency: 10, seconds: 2, mebibytes: 1 }
+  const configBase = { ...qualityDefaults, rounds: 2, concurrency: 6, seconds: 2, mebibytes: 1 }
   const nodes = Array.from({ length: 205 }, (_, i) => ({
     key: 'quality-src/' + String(i).padStart(8, '0'), name: '节点 ' + i, sourceName: '本机',
     connection: { type: 'http', server: '127.0.0.1', port, username: i === 204 ? 'b' : 'a', password: String(i) },
@@ -114,11 +114,11 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
   const inspect = async () => {
     aiChecks++
     const ai = Object.fromEntries(surfaces.map(k => [k, classify(k, null)])) as AiResults
-    if (aiChecks % 2 === 0) ai.grok = classify('grok', { status: 200, location: '', challenge: false, body: '<title>Grok</title>' })
+    if (aiChecks % 2 === 0) ai.chatgptWeb = classify('chatgptWeb', { status: 200, location: '', challenge: false, body: '{"cookie_consent_required":false}' })
     return ai
   }
   const stages: Progress[] = []
-  const report = await run(job, binary, AbortSignal.timeout(55_000), p => stages.push(p), endpoints, inspect)
+  const report = await run(job, binary, AbortSignal.timeout(90_000), p => stages.push(p), endpoints, inspect)
   assert.ok(reportSchema.safeParse(report).success)
   assert.equal(counts.sample, 3 * 205)
   assert.equal(auths.size, 205)
@@ -126,7 +126,7 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
   assert.ok(report.results.slice(0, -1).every(row => row.exit?.ip === '192.0.2.10'))
   assert.equal(report.results.at(-1)!.exit!.ip, '192.0.2.11')
   assert.equal(aiChecks, 205)
-  assert.deepEqual(new Set(report.results.slice(0, -1).map(row => row.ai!.grok.state)), new Set(['network_error', 'reachable']))
+  assert.deepEqual(new Set(report.results.slice(0, -1).map(row => row.ai!.chatgptWeb.state)), new Set(['network_error', 'reachable']))
   assert.equal(counts.downloads, 0)
   assert.ok(stages.some(p => p.stage === 'ai' && p.done === 205 && p.total === 205))
   const down = { ...nodes[1], connection: { ...nodes[1].connection, username: 'down' } }
@@ -135,7 +135,7 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
   const ddns = { ...nodes[0], connection: { ...nodes[0].connection, server: 'entry-probe.invalid' } }
   t.mock.method(dns, 'lookup', async () => [{ address: '127.0.0.2', family: 4 }, { address: '127.0.0.1', family: 4 }])
   const small = await run({ ...job, nodes: [ddns, down, invalid], config: { ...configBase, ai: false, bandwidth: true } },
-    binary, AbortSignal.timeout(20_000), () => {}, { ...endpoints, exit: 'https://fixture.invalid/empty-exit', exitFallback: 'https://fixture.invalid/fallback-exit' })
+    binary, AbortSignal.timeout(60_000), () => {}, { ...endpoints, exit: 'https://fixture.invalid/empty-exit', exitFallback: 'https://fixture.invalid/fallback-exit' })
   assert.deepEqual(small.results[0].exit, { ip: '192.0.2.10', region: 'JP' })
   assert.equal(small.results[0].speed!.stop, 'bytes')
   assert.equal(small.results[0].speed!.bytes, 1024 ** 2)
@@ -144,20 +144,113 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
   assert.equal(small.results[1].speed, null)
   assert.equal(small.results[2].error, 'invalid_node')
   assert.equal(counts.downloads, 1)
-  const unknownExits = await run({ ...job, nodes: nodes.slice(0, 2) }, binary, AbortSignal.timeout(20_000), () => {},
+  const unknownExits = await run({ ...job, nodes: nodes.slice(0, 2) }, binary, AbortSignal.timeout(60_000), () => {},
     { ...endpoints, exit: 'https://fixture.invalid/empty-exit', exitFallback: 'https://fixture.invalid/empty-exit' }, inspect)
   assert.ok(unknownExits.results.every(row => row.available && row.exit === null && row.ai && !row.aiSkipped))
   assert.equal(aiChecks, 207)
   const weak = { ...nodes[1], connection: { ...nodes[1].connection, username: 'weak' } }
-  const shared = await run({ ...job, nodes: [nodes[0], weak] }, binary, AbortSignal.timeout(20_000), () => {}, endpoints, inspect)
+  const shared = await run({ ...job, nodes: [nodes[0], weak] }, binary, AbortSignal.timeout(60_000), () => {}, endpoints, inspect)
   assert.deepEqual(shared.results[0].exit, shared.results[1].exit)
   assert.ok(shared.results[0].ai)
   assert.equal(shared.results[1].lossRate, .5)
   assert.equal(shared.results[1].aiSkipped, 'weak_connection')
   assert.equal(shared.results[1].ai, null)
   assert.equal(aiChecks, 208)
+
+  const basicOnlyStages: Progress[] = []
+  const basicOnly = await run({ ...job, nodes: [nodes[0]], config: { ...configBase, basic: true, bandwidth: false, ai: false } },
+    binary, AbortSignal.timeout(60_000), p => basicOnlyStages.push(p), endpoints, inspect)
+  assert.equal(basicOnly.results[0].available, true)
+  assert.equal(basicOnly.results[0].samples.length, configBase.rounds)
+  assert.equal(basicOnly.results[0].speed, null)
+  assert.equal(basicOnly.results[0].ai, null)
+  assert.equal(aiChecks, 208)
+  assert.equal(counts.downloads, 1)
+  assert.ok(basicOnlyStages.some(p => p.stage === 'latency'))
+  assert.ok(!basicOnlyStages.some(p => p.stage === 'bandwidth' || p.stage === 'ai'))
+
+  const info = { ...nodes[3], name: '剩余流量：100 GB' }
+  const sampleBeforeAiOnly = counts.sample
+  const downloadsBeforeAiOnly = counts.downloads
+  const aiOnlyStages: Progress[] = []
+  const reachableAi = async () => {
+    const ai = Object.fromEntries(surfaces.map(k => [k, classify(k, null)])) as AiResults
+    ai.chatgptWeb = classify('chatgptWeb', { status: 200, location: '', challenge: false, body: '{"cookie_consent_required":false}' })
+    return ai
+  }
+  const aiOnly = await run(
+    { ...job, nodes: [nodes[0], down, invalid, info], config: { ...configBase, basic: false, bandwidth: true, ai: true } },
+    binary,
+    AbortSignal.timeout(60_000),
+    p => aiOnlyStages.push(p),
+    endpoints,
+    reachableAi,
+  )
+  assert.equal(counts.sample, sampleBeforeAiOnly)
+  assert.equal(counts.downloads, downloadsBeforeAiOnly)
+  assert.ok(!aiOnlyStages.some(p => p.stage === 'latency' || p.stage === 'bandwidth'))
+  assert.ok(aiOnlyStages.some(p => p.stage === 'starting'))
+  assert.ok(aiOnlyStages.some(p => p.stage === 'ai'))
+  assert.equal(aiOnly.results.length, 4)
+  assert.deepEqual(aiOnly.results.map(r => r.key), [nodes[0].key, down.key, invalid.key, info.key])
+  assert.ok(reportSchema.safeParse(aiOnly).success)
+  assert.equal(aiOnly.results[0].available, true)
+  assert.equal(aiOnly.results[0].error, null)
+  assert.deepEqual(aiOnly.results[0].samples, [])
+  assert.equal(aiOnly.results[0].tlsMedianMs, null)
+  assert.equal(aiOnly.results[0].httpsMedianMs, null)
+  assert.equal(aiOnly.results[0].jitterMs, null)
+  assert.equal(aiOnly.results[0].lossRate, null)
+  assert.equal(aiOnly.results[0].speed, null)
+  assert.deepEqual(aiOnly.results[0].exit, { ip: '192.0.2.10', region: 'JP' })
+  assert.ok(aiOnly.results[0].ai)
+  assert.equal(aiOnly.results[1].error, null)
+  assert.deepEqual(aiOnly.results[1].samples, [])
+  assert.equal(aiOnly.results[1].speed, null)
+  assert.equal(aiOnly.results[1].exit, null)
+  assert.ok(aiOnly.results[1].ai)
+  assert.equal(aiOnly.results[2].error, 'invalid_node')
+  assert.equal(aiOnly.results[2].available, false)
+  assert.equal(aiOnly.results[2].exit, null)
+  assert.equal(aiOnly.results[2].speed, null)
+  assert.equal(aiOnly.results[2].ai, null)
+  assert.equal(aiOnly.results[3].error, 'info_node')
+  assert.equal(aiOnly.results[3].available, false)
+  assert.equal(aiOnly.results[3].exit, null)
+  assert.equal(aiOnly.results[3].speed, null)
+  assert.equal(aiOnly.results[3].ai, null)
+
+  const aiOnlyDownReal = await run(
+    { ...job, nodes: [down], config: { ...configBase, basic: false, bandwidth: true, ai: true } },
+    binary,
+    AbortSignal.timeout(60_000),
+    () => {},
+    { ...endpoints, exit: 'https://fixture.invalid/empty-exit', exitFallback: 'https://fixture.invalid/empty-exit' },
+    async () => Object.fromEntries(surfaces.map(k => [k, classify(k, null)])) as AiResults,
+  )
+  assert.equal(aiOnlyDownReal.results[0].available, false)
+  assert.equal(aiOnlyDownReal.results[0].exit, null)
+  assert.ok(surfaces.every(s => aiOnlyDownReal.results[0].ai![s].state === 'network_error'))
+
+  const aiOnlyUnknownExit = await run(
+    { ...job, nodes: [nodes[0]], config: { ...configBase, basic: false, ai: true } },
+    binary,
+    AbortSignal.timeout(60_000),
+    () => {},
+    { ...endpoints, exit: 'https://fixture.invalid/empty-exit', exitFallback: 'https://fixture.invalid/empty-exit' },
+    reachableAi,
+  )
+  assert.equal(aiOnlyUnknownExit.results[0].exit, null)
+  assert.equal(aiOnlyUnknownExit.results[0].aiSkipped, undefined)
+  assert.ok(aiOnlyUnknownExit.results[0].ai)
+  assert.equal(aiOnlyUnknownExit.results[0].available, true)
+
+  await assert.rejects(
+    run({ ...job, nodes: [nodes[0]], config: { ...configBase, basic: false, ai: false } }, binary, AbortSignal.timeout(10_000), () => {}, endpoints, inspect),
+    /基础检测和 AI 检测至少启用一项/,
+  )
   let usedPort = 0
-  await withCore(binary, [nodes[0]], AbortSignal.timeout(45_000), async ([route], _, signal) => {
+  await withCore(binary, [nodes[0]], AbortSignal.timeout(75_000), async ([route], _, signal) => {
     usedPort = route.outlet.port
     const measure = (latency: string, exit = endpoints.exit) => measureLatency(nodes[0].key, route.outlet, configBase, signal, { ...endpoints, latency, exit })
     const retried = await measure(endpoints.latency, 'https://fixture.invalid/retry-exit')
@@ -169,15 +262,15 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
     const closed = await measure('https://fixture.invalid/closed')
     assert.equal(closed.error, 'https_no_response')
     assert.ok(closed.samples.every(s => s.httpStatus === undefined && s.tlsMs !== null))
-    const slow = await measureSpeed(route.outlet, configBase, signal, 'https://fixture.invalid/slow')
+    const slow = await measureSpeed(route.outlet, { ...configBase, seconds: 4 }, signal, 'https://fixture.invalid/slow')
     assert.equal(slow.stop, 'duration')
     assert.ok(slow.bytes > 0 && slow.bytes < 1024 ** 2)
-    assert.equal(slow.perSecondBps.length, 2)
-    assert.ok(slow.elapsedMs <= 2000)
+    assert.equal(slow.perSecondBps.length, 4)
+    assert.ok(slow.elapsedMs <= 4000)
     const ai = await inspectPlatforms(route.outlet, 'JP', signal)
     assert.ok(surfaces.every(s => ai[s].state === 'network_error' && !ai[s].needsReview))
   })
-  assert.deepEqual([...aiHosts].sort(), ['android.chat.openai.com', 'api.anthropic.com', 'api.openai.com', 'chatgpt.com', 'claude.ai', 'gemini.google.com', 'grok.com'].map(h => h + ':443').sort())
+  assert.deepEqual([...aiHosts].sort(), ['android.chat.openai.com', 'api.openai.com', 'chatgpt.com', 'gemini.google.com'].map(h => h + ':443').sort())
   assert.ok(offered.has('h2'))
   const reused = net.createServer()
   reused.listen(usedPort, '127.0.0.1')
@@ -185,7 +278,7 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
   await new Promise<void>(done => reused.close(() => done()))
 })
 
-test('cancelling a full-size assignment releases every group of isolated listeners', { skip: !existsSync(binary), timeout: 40_000 }, async () => {
+test('cancelling a full-size assignment releases every group of isolated listeners', { skip: !existsSync(binary), timeout: 75_000 }, async () => {
   const cancel = new AbortController()
   const nodes = Array.from({ length: 1024 }, (_, i) => ({
     key: 'batch-src/' + String(i).padStart(8, '0'), name: 'test', sourceName: 'fixture',

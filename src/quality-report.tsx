@@ -1,9 +1,10 @@
 import { useLayoutEffect, useRef, useState } from 'react'
 import { ArrowLeft, ChevronRight, Download, Network } from 'lucide-react'
 import { aiSkipReason, surfaces, surfaceNames } from '../shared/quality-options.ts'
-import type { AiReading, QualityReport } from '../shared/quality.ts'
-import { inferredExitRegion, platformSurfaces, platformVerdict, platforms, verdictLabels, verdictScores } from '../shared/quality-snapshot.ts'
-import { qualitySortLabels, stateLabels } from './node-quality.tsx'
+import type { AiReading, AvailabilityStats, LatestNodeQuality, QualityReport } from '../shared/quality.ts'
+import { getAiDisplayStatus, inferredExitRegion } from '../shared/quality-snapshot.ts'
+import { AiUnlockCell, AvailabilityReading, stateLabels } from './node-quality.tsx'
+import { useProject } from './project.tsx'
 import { Badge, Button, Empty, NativeSelect, NativeSelectOption, Pager, SearchBox, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, downloadJson, usePage } from './ui.tsx'
 
 type Row = QualityReport['results'][number]
@@ -25,8 +26,7 @@ const evidenceLabels: Record<AiReading['evidence'], string> = {
   bot_challenge: 'Google 要求验证异常流量', consent_redirect: '入口转向 Google 同意页', disallowed_isp: '网关明确限制运营商、VPN 或代理',
   rate_limit: '服务要求降低请求频率', unrecognized: '响应缺少明确判据', network: '请求失败或超时',
 }
-const hasReview = (row: Row) => Boolean(row.ai && Object.values(row.ai).some(v => v.needsReview))
-const aiTone = (r: AiReading) => r.state === 'reachable' ? 'success' : r.needsReview || r.state === 'degraded_challenge' ? 'warning' : 'danger'
+const hasReview = (row: Row) => Boolean(row.ai && Object.values(row.ai).some(v => v?.needsReview))
 function exitLabel(row: Row) {
   const inferred = inferredExitRegion(row)
   const region = row.exit?.region ?? (inferred ? '推定 ' + inferred : null)
@@ -42,42 +42,58 @@ function latencyError(row: Row) {
 function Metrics({ values }: { values: [string, string][] }) {
   return <dl className="quality-metrics">{values.map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>
 }
-function NodeDetail({ row, back }: { row: Row; back: () => void }) {
+function NodeDetail({ row, availability, back }: { row: Row; availability?: AvailabilityStats | null; back: () => void }) {
   const heading = useRef<HTMLHeadingElement>(null)
   useLayoutEffect(() => {
     const body = heading.current?.closest('.workspace-dialog-body')
     if (body) body.scrollTop = 0
+    else window.scrollTo(0, 0)
     heading.current?.focus({ preventScroll: true })
   }, [])
   const endReason = { bytes: '达到流量上限', duration: '达到时长上限', end: '下载完成', error: '下载中断' }
+  const exitRegion = row.exit?.region ?? inferredExitRegion(row)
   return <div className="quality-detail">
     <Button size="small" variant="ghost" icon={ArrowLeft} onClick={back}>返回检测结果</Button>
     <div><h3 className="quality-title" translate="no" ref={heading} tabIndex={-1}>{row.name}</h3><p className="muted">{row.sourceName} · {exitLabel(row) || '未采集到出口'}</p></div>
     {row.error && <p>{latencyError(row)}</p>}
     {row.aiSkipped && <p className="muted">{row.aiSkipped === 'missing_exit' ? '未获取出口 IP，已跳过 AI 检测。' : '连接丢包过高或延迟过长，已跳过 AI 检测。'}</p>}
     {row.ai && aiSkipReason(row) && <p className="muted">此线路达到弱网阈值，工作台仅保留历史 AI 读数供参考。</p>}
-    <Metrics values={[[ 'TLS 握手中位数', ms(row.tlsMedianMs)], ['HTTPS 延迟中位数', ms(row.httpsMedianMs)], ['HTTPS 抖动', ms(row.jitterMs)], ['请求丢包率', loss(row.lossRate)]]} />
+    <Metrics values={[
+      ['TLS 握手中位数', ms(row.tlsMedianMs)],
+      ['HTTPS 延迟中位数', ms(row.httpsMedianMs)],
+      ['HTTPS 抖动', ms(row.jitterMs)],
+      ['请求丢包率', loss(row.lossRate)],
+      ...(availability && availability.total > 0
+        ? [['历史可用率', `${Number((availability.rate * 100).toFixed(1))}%（${availability.success}/${availability.total} 次）`] as [string, string]]
+        : []),
+    ]} />
     {!!row.samples.length && <div><h4>各轮采样</h4><ol className="quality-samples">{row.samples.map((s, i) => <li key={i}>第 {i + 1} 轮 <span>TLS {ms(s.tlsMs)} · HTTPS {s.httpsMs === null ? s.httpStatus ?? '失败' : ms(s.httpsMs)}</span></li>)}</ol></div>}
     {row.speed && <section><h4>流式下载</h4>
       <Metrics values={[['平均速度', speed(row.speed.averageBps)], ['最高速度', speed(row.speed.peakBps)], ['下载流量', byteSize(row.speed.bytes)], ['用时', (row.speed.elapsedMs / 1000).toFixed(2) + ' s']]} />
       <p className="muted">{endReason[row.speed.stop]} · 各秒速率</p>
       <ol className="quality-samples">{row.speed.perSecondBps.map((rate, i) => <li key={i}>第 {i + 1} 秒 <span>{speed(rate)}</span></li>)}</ol>
     </section>}
-    {row.ai && <section><h4>AI 平台</h4>{platforms.map(platform => {
-      const verdict = platformVerdict(row.ai!, platform)
-      return <div key={platform} className="quality-platform"><h5>{qualitySortLabels[platform]} · {verdict ? verdictLabels[verdict] + '（' + verdictScores[verdict] + ' 分）' : '证据不足'}</h5>
-        <div className="quality-ai">{platformSurfaces[platform].map(surface => {
-          const a = row.ai![surface]
-          return <div key={surface}><strong>{surfaceNames[surface]}</strong><span><Badge tone={aiTone(a)}>{stateLabels[a.state]}</Badge>
-            <small>{evidenceLabels[a.evidence]}{a.httpStatus && ' · HTTP ' + a.httpStatus}{a.providerRegion && ' · 平台地区 ' + a.providerRegion}{a.needsReview && ' · 需复核'}</small></span></div>
-        })}</div></div>
-    })}</section>}
+    {row.ai && <section><h4>AI 平台</h4>
+      <div className="quality-ai">{surfaces.map(surface => {
+        const a = row.ai?.[surface]
+        const status = getAiDisplayStatus(a, exitRegion)
+        return <div key={surface}>
+          <strong>{surfaceNames[surface]}</strong>
+          <span className="quality-ai-detail">
+            {status && <Badge tone={status.tone}>{status.label}</Badge>}
+            <small>{a ? `${stateLabels[a.state]} · ${evidenceLabels[a.evidence]}${a.httpStatus ? ' · HTTP ' + a.httpStatus : ''}${a.providerRegion ? ' · 平台地区 ' + a.providerRegion : ''}${a.needsReview ? ' · 需复核' : ''}` : '未检测'}</small>
+          </span>
+        </div>
+      })}</div>
+    </section>}
   </div>
 }
-export function ReportView({ report }: { report: QualityReport }) {
+export function ReportView({ report, latestRows }: { report: QualityReport; latestRows?: Record<string, LatestNodeQuality> }) {
+  const { quality } = useProject()
+  const latest = latestRows ?? (report.targetDeviceId ? quality.latest[report.targetDeviceId] : undefined)
+  const hasAvailability = Boolean(latest && report.results.some(r => (latest[r.key]?.availability?.total ?? 0) > 0))
   const [filter, setFilter] = useState('all')
   const [sort, setSort] = useState('latency')
-  const [platform, setPlatform] = useState<typeof surfaces[number]>('chatgptWeb')
   const [query, setQuery] = useState('')
   const [detail, setDetail] = useState<Row | null>(null)
   const resultList = useRef<HTMLDivElement>(null)
@@ -87,11 +103,12 @@ export function ReportView({ report }: { report: QualityReport }) {
     const { key, top } = previous.current
     const body = resultList.current.closest('.workspace-dialog-body')
     if (body) body.scrollTop = top
+    else window.scrollTo(0, top)
     resultList.current.querySelector<HTMLButtonElement>('[data-result-key="' + CSS.escape(key) + '"]')?.focus({ preventScroll: true })
     previous.current = null
   }, [detail])
   function inspect(row: Row) {
-    previous.current = { key: row.key, top: resultList.current?.closest('.workspace-dialog-body')?.scrollTop ?? 0 }
+    previous.current = { key: row.key, top: resultList.current?.closest('.workspace-dialog-body')?.scrollTop ?? window.scrollY }
     setDetail(row)
   }
   const available = report.results.filter(r => r.available).length
@@ -103,7 +120,7 @@ export function ReportView({ report }: { report: QualityReport }) {
     && [row.name, row.sourceName, exitLabel(row)].some(v => v.toLowerCase().includes(query.trim().toLowerCase())))
     .sort((a, b) => sort === 'speed' ? (b.speed?.averageBps ?? -1) - (a.speed?.averageBps ?? -1) : (a.httpsMedianMs ?? Infinity) - (b.httpsMedianMs ?? Infinity))
   const [offset, setOffset] = usePage(rows.length, 20)
-  if (detail) return <NodeDetail row={detail} back={() => setDetail(null)} />
+  if (detail) return <NodeDetail row={detail} availability={latest?.[detail.key]?.availability} back={() => setDetail(null)} />
   return <div ref={resultList} className="quality-results">
     <div className="quality-heading"><div><h3 className="quality-title">检测结果</h3><p className="muted">可用 {available} / {report.results.length}{report.config.ai ? ' · ' + reviews + ' 个节点的 AI 结果需复核' : ' · AI 未检测'}{!report.config.bandwidth && ' · 下载未检测'}</p></div>
       <Button icon={Download} size="small" onClick={() => downloadJson('SubMeld-质量检测-' + report.jobId + '.json', report)}>导出 JSON</Button></div>
@@ -115,14 +132,15 @@ export function ReportView({ report }: { report: QualityReport }) {
       <NativeSelect aria-label="检测结果筛选" value={filter} onChange={e => { setFilter(e.target.value); setOffset(0) }}>
         {Object.entries({ all: '全部结果', up: '可用节点', down: '不可用节点', ...(report.config.ai ? { review: 'AI 待复核' } : {}) }).map(([k, v]) => <NativeSelectOption key={k} value={k}>{v}</NativeSelectOption>)}</NativeSelect>
       {report.config.bandwidth && <NativeSelect aria-label="结果排序" value={sort} onChange={e => { setSort(e.target.value); setOffset(0) }}><NativeSelectOption value="latency">延迟从低到高</NativeSelectOption><NativeSelectOption value="speed">下载从快到慢</NativeSelectOption></NativeSelect>}
-      {report.config.ai && <NativeSelect aria-label="对比 AI 平台" value={platform} onChange={e => setPlatform(e.target.value as typeof platform)}>{surfaces.map(s => <NativeSelectOption key={s} value={s}>{surfaceNames[s]}</NativeSelectOption>)}</NativeSelect>}
     </div>
-    {rows.length ? <><Table className="mobile-table quality-table" scrollLabel="节点检测结果"><TableHeader><TableRow><TableHead>节点 / 出口</TableHead><TableHead>可用性</TableHead><TableHead>HTTPS 延迟</TableHead>{report.config.bandwidth && <TableHead>平均下载</TableHead>}{report.config.ai && <TableHead>{surfaceNames[platform]}</TableHead>}<TableHead>详情</TableHead></TableRow></TableHeader>
+    {rows.length ? <><Table className="mobile-table quality-table" scrollLabel="节点检测结果"><TableHeader><TableRow><TableHead>节点 / 出口</TableHead><TableHead>可用性</TableHead>{hasAvailability && <TableHead>可用率</TableHead>}<TableHead>HTTPS 延迟</TableHead>{report.config.bandwidth && <TableHead>平均下载</TableHead>}{report.config.ai && <TableHead>AI 解锁</TableHead>}<TableHead>详情</TableHead></TableRow></TableHeader>
       <TableBody>{rows.slice(offset, offset + 20).map(row => <TableRow key={row.key}><TableCell className="table-row-title"><strong translate="no">{row.name}</strong><small>{exitLabel(row) || row.sourceName}</small></TableCell>
-        <TableCell mobileLabel="可用性"><Badge tone={row.error === 'info_node' ? 'neutral' : row.available ? 'success' : 'danger'}>{row.error === 'info_node' ? '提示条目' : row.available ? '可用' : '不可用'}</Badge></TableCell><TableCell mobileLabel="HTTPS 延迟">{ms(row.httpsMedianMs)}</TableCell>
+        <TableCell mobileLabel="可用性"><Badge tone={row.error === 'info_node' ? 'neutral' : row.available ? 'success' : 'danger'}>{row.error === 'info_node' ? '提示条目' : row.available ? '可用' : '不可用'}</Badge></TableCell>
+        {hasAvailability && <TableCell mobileLabel="可用率"><AvailabilityReading availability={latest?.[row.key]?.availability} infoNode={row.error === 'info_node'} /></TableCell>}
+        <TableCell mobileLabel="HTTPS 延迟">{ms(row.httpsMedianMs)}</TableCell>
         {report.config.bandwidth && <TableCell mobileLabel="平均下载">{row.speed ? row.speed.stop === 'error' && !row.speed.bytes ? '下载失败' : speed(row.speed.averageBps) : '未检测'}</TableCell>}
-        {report.config.ai && <TableCell mobileLabel={surfaceNames[platform]}>{row.ai ? <Badge tone={aiTone(row.ai[platform])}>{stateLabels[row.ai[platform].state]}</Badge> : '未检测'}</TableCell>}
-        <TableCell><Button variant="ghost" size="small" aria-label={'查看检测详情 ' + row.name} data-result-key={row.key} onClick={() => inspect(row)}>详情<ChevronRight /></Button></TableCell>
+        {report.config.ai && <TableCell mobileLabel="AI 解锁" data-col="ai"><AiUnlockCell ai={row.ai} exitRegion={row.exit?.region ?? inferredExitRegion(row)} skipped={row.aiSkipped} infoNode={row.error === 'info_node'} tested={false} /></TableCell>}
+        <TableCell><Button variant="ghost" size="small" aria-label={'查看检测详情 ' + row.name} data-result-key={row.key} onClick={() => inspect(row)}>详情<ChevronRight aria-hidden="true" /></Button></TableCell>
       </TableRow>)}</TableBody></Table>{rows.length > 20 && <Pager offset={offset} count={rows.length} pageSize={20} onChange={setOffset} />}</> : <Empty icon={Network} title="没有匹配的检测结果" />}
   </div>
 }

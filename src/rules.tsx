@@ -142,7 +142,7 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }: { i
     }
   }
   async function testProvider() {
-    if (!form.provider) return
+    if (busy || !form.provider) return
     setBusy('test')
     setError('')
     try { setTested(await call('probe', { kind: 'provider', id: form.id, ...form.provider, url: form.provider.url.trim() })) }
@@ -150,6 +150,7 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }: { i
     finally { setBusy('') }
   }
   async function commit() {
+    if (busy) return
     setError('')
     if (quick && ruleValue(firstRule.type, firstRule.value) === null) {
       setInvalidField({ name: 'value', message: '请填写有效的' + ruleTypes[firstRule.type][0] + '，例如 ' + ruleTypes[firstRule.type][2] + '。' })
@@ -187,16 +188,19 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }: { i
       onBrowseSets()
     }
   }
-  const browseSets = !exists && <Button variant="ghost" size="small" disabled={Boolean(busy)} onClick={() => guard.close(() => {
-    browseOnClose.current = true
-    onClose()
-  })}>搜索规则集目录</Button>
+  const browseSets = !exists && <Button variant="ghost" size="small" disabled={Boolean(busy)} onClick={() => {
+    if (busy) return
+    return guard.close(() => {
+      browseOnClose.current = true
+      onClose()
+    })
+  }}>搜索规则集目录</Button>
   if (quick) {
     const [, hint, example] = ruleTypes[firstRule.type]
     const formId = 'manual-rule-' + form.id
     return <Modal wide title="手动添加规则" onClose={close} onCloseAutoFocus={returnFocus} className="quick-rule-dialog"
-      footer={<>{browseSets}<Button variant="ghost" onClick={close}>取消</Button><Button form={formId} type="submit" variant="primary" icon={Plus} busy={busy === 'save'}>添加规则</Button></>}>
-      <form id={formId} className="quick-rule-form" onSubmit={event => { event.preventDefault(); void commit() }}>
+      footer={<>{browseSets}<Button variant="ghost" disabled={Boolean(busy)} onClick={close}>取消</Button><Button form={formId} type="submit" variant="primary" icon={Plus} busy={busy === 'save'} disabled={Boolean(busy && busy !== 'save')}>添加规则</Button></>}>
+      <form id={formId} className="quick-rule-form" inert={Boolean(busy)} onSubmit={event => { event.preventDefault(); void commit() }}>
         {error && <Alert tone="danger">{error}</Alert>}
         <fieldset disabled={Boolean(busy)} className="quick-rule-fields">
           <legend className="sr-only">设置匹配条件和出站策略</legend>
@@ -213,7 +217,7 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }: { i
             <OutletSelect value={form.target} onChange={value => update('target', value)} groups={state.draft.groups} /></Field>
         </fieldset>
         {firstRule.type !== 'MATCH' && <p className="field-note muted">{hint}</p>}
-        {noResolveTypes.has(firstRule.type) && <CheckOption label="匹配时不主动解析域名（no-resolve）" checked={firstRule.noResolve} onCheckedChange={checked => updateRow(0, { noResolve: checked })} />}
+        {noResolveTypes.has(firstRule.type) && <CheckOption label="匹配时不主动解析域名（no-resolve）" disabled={Boolean(busy)} checked={firstRule.noResolve} onCheckedChange={checked => updateRow(0, { noResolve: checked })} />}
         <div><Button variant="ghost" size="small" disabled={Boolean(busy)} onClick={() => {
           if (firstRule.value.trim()) update('name', suggestedName)
           setInvalidField(null); setDetailed(true)
@@ -223,8 +227,8 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }: { i
   }
   return <Modal wide title={exists ? '编辑服务 · ' + initial.name : form.inlineRules ? '粘贴规则集' : form.provider ? '从链接添加规则集' : '批量添加与高级设置'}
     onClose={close} onCloseAutoFocus={returnFocus}
-    footer={<>{browseSets}<Button variant="ghost" onClick={close}>取消</Button><Button variant="primary" icon={Check} busy={busy === 'save'} disabled={busy === 'test'} onClick={commit}>保存服务</Button></>}>
-    <div className="stack">
+    footer={<>{browseSets}<Button variant="ghost" disabled={Boolean(busy)} onClick={close}>取消</Button><Button variant="primary" icon={Check} busy={busy === 'save'} disabled={Boolean(busy && busy !== 'save')} onClick={commit}>保存服务</Button></>}>
+    <div className="stack" inert={Boolean(busy)}>
       {error && <Alert tone="danger">{error}</Alert>}
       <FieldGroup className="form-grid">
         <Field label="服务名称" name="service_name" error={invalidField?.name === 'name' ? invalidField.message : undefined}>
@@ -252,9 +256,12 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }: { i
       </div> : form.provider ? <>
         <ProviderFields value={form.provider} onChange={value => { update('provider', value); setTested(null) }} />
         <div className="actions">
-          <Button icon={RefreshCw} onClick={testProvider} busy={busy === 'test'} disabled={!form.provider.url && !form.provider.urlStored && !form.provider.catalogId}>测试规则集</Button>
-          {exists && <Button onClick={async () => {
-            try { await call('refresh', { kind: 'provider', id: form.id }); await reload(); notify('规则集刷新已提交') } catch (cause) { const error = asError(cause); setError(error.message) }
+          <Button icon={RefreshCw} onClick={testProvider} busy={busy === 'test'} disabled={Boolean(busy && busy !== 'test') || (!form.provider.url && !form.provider.urlStored && !form.provider.catalogId)}>测试规则集</Button>
+          {exists && <Button busy={busy === 'refresh'} disabled={Boolean(busy)} onClick={async () => {
+            if (busy) return
+            setBusy('refresh')
+            setError('')
+            try { await call('refresh', { kind: 'provider', id: form.id }); await reload(); notify('规则集刷新已提交') } catch (cause) { const error = asError(cause); setError(error.message) } finally { setBusy('') }
           }}>刷新已保存版本</Button>}
           {(tested || record?.good) && <Badge tone="success">{(tested ?? record.good)?.count} 条有效内容</Badge>}
         </div>
@@ -309,7 +316,7 @@ function ServiceEditor({ initial, entries, focused, onClose, onBrowseSets }: { i
 }
 
 function MatchForm({ buildDraft, serviceId, disabled, changedKey, onOpen, examples = [] }: { buildDraft?: () => Draft; serviceId?: string; disabled?: boolean; changedKey?: string | number; onOpen?: (rule: EvaluatedRule) => void; examples?: string[] }) {
-  const { call, view, state, quality } = useProject()
+  const { call, view, state } = useProject()
   const [domain, setDomain] = useState(examples[0] ?? '')
   const [result, setResult] = useState<MatchResponse | null>(null)
   const [busy, setBusy] = useState(false)
@@ -336,7 +343,7 @@ function MatchForm({ buildDraft, serviceId, disabled, changedKey, onOpen, exampl
     setBusy(true)
     setResult(null)
     try {
-      const answer = await call('match', { domain: value, draft: buildDraft?.(), serviceId, qualityReportId: quality.reportId })
+      const answer = await call('match', { domain: value, draft: buildDraft?.(), serviceId })
       if (latest.current === request) setResult(answer)
     } catch (cause) {
       const error = asError(cause)
@@ -378,16 +385,17 @@ function CatalogDialog({ entry, onClose }: { entry?: CatalogEntry; onClose: () =
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const close = () => { if (!busy) return guard.close(onClose) }
-  return <Modal title={entry ? '编辑目录条目' : '添加目录条目'} onClose={close} footer={<><Button onClick={close}>取消</Button><Button variant="primary" busy={busy} onClick={async () => {
+  return <Modal title={entry ? '编辑目录条目' : '添加目录条目'} onClose={close} footer={<><Button disabled={busy} onClick={close}>取消</Button><Button variant="primary" busy={busy} onClick={async () => {
+    if (busy) return
     setBusy(true)
     try {
       const providers = entry ? state.library.providers.map(item => item.id === entry.id ? form : item) : [...state.library.providers, form]
-      applyState(await call('library', { ...state.library, providers }))
+      if (!applyState(await call('library', { ...state.library, providers }))) return
       notify('规则集目录已保存')
       guard.leave(onClose)
     } catch (cause) { const error = asError(cause); setError(error.message) } finally { setBusy(false) }
   }}>保存目录条目</Button></>}>
-    <FieldGroup>{error && <Alert tone="danger">{error}</Alert>}
+    <FieldGroup inert={busy}>{error && <Alert tone="danger">{error}</Alert>}
       <Field label="目录名称"><Input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} /></Field>
       <ProviderFields value={form} onChange={provider => setForm({ ...form, ...provider })} />
     </FieldGroup>
@@ -458,6 +466,7 @@ export function RulesPage() {
   }
 
   async function run(action: () => unknown) {
+    if (busy) return
     setBusy(true)
     try { await action() } catch (cause) { const error = asError(cause); notify(error.message, 'danger') } finally { setBusy(false) }
   }
@@ -539,7 +548,7 @@ export function RulesPage() {
         {!!selected.length && <div className="batch-bar"><strong>已选 {selected.length} 个服务</strong>
           <Button size="small" busy={busy} onClick={() => updateService(selected, { enabled: true })}>批量启用</Button><Button size="small" disabled={busy} onClick={() => updateService(selected, { enabled: false })}>批量停用</Button>
           <OutletSelect label="批量出站策略" value={batchTarget} onChange={setBatchTarget} groups={draft.groups} /><Button size="small" disabled={!batchTarget || busy} onClick={() => updateService(selected, { target: batchTarget })}>修改策略</Button>
-          <Button variant="danger" size="small" onClick={() => deleteServices(selected)}>删除</Button><Button variant="ghost" size="small" onClick={() => setSelected([])}>清除选择</Button>
+          <Button variant="danger" size="small" disabled={busy} onClick={() => deleteServices(selected)}>删除</Button><Button variant="ghost" size="small" onClick={() => setSelected([])}>清除选择</Button>
         </div>}
         {!visibleServices.length ? <Empty icon={Globe2} title={services.length ? '没有匹配的服务' : '还没有分流服务'}
           detail={!services.length && '在上方选择规则集和出站策略，即可创建分流。'} /> : <ul className="outlet-list">{visibleServices.slice(servicesOffset, servicesOffset + 18).map(service => {
@@ -562,7 +571,7 @@ export function RulesPage() {
               <PopoverContent className="outlet-menu"><Button icon={Pencil} size="small" onClick={() => navigate('rules', service.id)}>编辑服务</Button>
                 <MoveButtons index={index} count={services.length} onMove={moveService} area="service" drag={false} />
                 <Button size="small" disabled={busy} onClick={() => updateService([service.id], { enabled: !service.enabled })}>{service.enabled ? '停用' : '启用'}</Button>
-                <Button icon={Trash2} size="small" variant="ghost" onClick={() => deleteServices([service.id])}>删除服务</Button></PopoverContent>
+                <Button icon={Trash2} size="small" variant="ghost" disabled={busy} onClick={() => deleteServices([service.id])}>删除服务</Button></PopoverContent>
             </Popover>
           </li>
         })}</ul>}
@@ -601,7 +610,10 @@ export function RulesPage() {
         <Button size="small" disabled={!ruleService || busy || draft.rules.some(rule => ruleBatch.has(rule.id) && rule.type === 'RULE-SET')}
           onClick={() => updateRules(rule => [{ ...rule, serviceId: ruleService }])}>归入服务</Button>
         <Button size="small" variant="danger" disabled={busy} onClick={async () => {
-          if (await confirm({ title: '删除规则？', detail: '选中的匹配规则将从规则表中移除。', action: '删除选中规则', danger: true })) updateRules(() => [])
+          if (busy) return
+          if (await confirm({ title: '删除规则？', detail: '选中的匹配规则将从规则表中移除。', action: '删除选中规则', danger: true })) {
+            if (!busy) updateRules(() => [])
+          }
         }}>删除选中规则</Button>
         <Button size="small" variant="ghost" onClick={() => setSelectedRules([])}>清除选择</Button>
       </div>}
@@ -625,10 +637,11 @@ export function RulesPage() {
               <TableCell mobileLabel="状态"><Badge tone={!generated && rule.enabled && service?.enabled ? 'warning' : 'neutral'}>{generated ? '已生成' : !rule.enabled || !service?.enabled ? '已停用' : '有错误'}</Badge></TableCell>
               <TableCell className="table-row-wide"><div className="actions row-actions"><MoveButtons index={index} count={draft.rules.length} onMove={moveRule} area="rule" />
                 {service && <IconButton icon={Pencil} label="编辑规则" onClick={() => navigate('rules', service.id, rule.id)} />}
-                <Button variant="ghost" size="small" onClick={() => run(() => save({ ...draft, rules: draft.rules.map(item => item.id === rule.id ? { ...item, enabled: !item.enabled } : item) }))}>{rule.enabled ? '停用' : '启用'}</Button>
-                <IconButton icon={Trash2} label="删除单条规则" onClick={async () => {
+                <Button variant="ghost" size="small" disabled={busy} onClick={() => run(() => save({ ...draft, rules: draft.rules.map(item => item.id === rule.id ? { ...item, enabled: !item.enabled } : item) }))}>{rule.enabled ? '停用' : '启用'}</Button>
+                <IconButton icon={Trash2} label="删除单条规则" disabled={busy} onClick={async () => {
+                  if (busy) return
                   if (await confirm({ title: '删除匹配规则？', detail: '此规则将从规则表中移除。', action: '删除规则', danger: true })) {
-                    await run(() => saveRuleChanges(draft.rules.filter(item => item.id !== rule.id)))
+                    if (!busy) await run(() => saveRuleChanges(draft.rules.filter(item => item.id !== rule.id)))
                   }
                 }} />
               </div></TableCell>
@@ -647,11 +660,15 @@ export function RulesPage() {
           setEditing({ service, entries: [newRule(service.id, 'RULE-SET')] })
         }}>作为规则集添加</Button>
           <IconButton icon={Pencil} label={'编辑目录 ' + entry.name} onClick={() => setCatalog({ entry })} />
-          <IconButton icon={Trash2} label={'删除目录 ' + entry.name} onClick={async () => {
-            if (await confirm({ title: '删除目录条目？', detail: '已添加的规则集会保有各自的设置。', action: '删除目录条目', danger: true })) await run(async () => {
-              applyState(await call('library', { ...state.library, providers: state.library.providers.filter(item => item.id !== entry.id) }))
-              notify('目录条目已删除')
-            })
+          <IconButton icon={Trash2} label={'删除目录 ' + entry.name} disabled={busy} onClick={async () => {
+            if (busy) return
+            if (await confirm({ title: '删除目录条目？', detail: '已添加的规则集会保有各自的设置。', action: '删除目录条目', danger: true })) {
+              if (!busy) await run(async () => {
+                if (applyState(await call('library', { ...state.library, providers: state.library.providers.filter(item => item.id !== entry.id) }))) {
+                  notify('目录条目已删除')
+                }
+              })
+            }
           }} /></div>
       </div>)}</div> : <Empty icon={Database} title="暂无目录条目" detail="支持经典规则、域名和 IP 网段列表。" />}
     </Panel></section>

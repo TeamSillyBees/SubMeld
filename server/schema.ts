@@ -36,8 +36,10 @@ export const source = z.object({
 })
 const groupPattern = text(maxPatternLength).refine(value => !compilePoolPattern(value).error, '请填写有效的 RE2 正则表达式。')
 const qualityCondition = z.strictObject({
-  alive: z.boolean().optional(), maxLatencyMs: z.number().min(0).max(600000).optional(),
+  alive: z.boolean().optional(), minAvailability: z.number().min(0).max(1).optional(),
+  maxLatencyMs: z.number().min(0).max(600000).optional(),
   maxLossRate: z.number().min(0).max(1).optional(), minBandwidthMbps: z.number().min(0).max(1000000).optional(),
+  aiAll: z.boolean().optional(), aiSurfaces: z.array(z.enum(surfaces)).max(surfaces.length).optional(),
   platforms: z.array(z.enum(surfaces)).max(surfaces.length).optional(),
   exitRegions: z.array(z.string().regex(/^[A-Z]{2}$/)).max(250).optional(),
   excludeExitRegions: z.boolean().optional(), maxJitterMs: z.number().min(0).max(600000).optional(),
@@ -61,6 +63,7 @@ const member = z.discriminatedUnion('kind', [
 export const group = z.object({
   id, name, type: z.enum(['select', 'url-test', 'fallback', 'load-balance']),
   enabled: z.boolean(), members: array(member, 16000), testUrl: url.default(''),
+  qualityDeviceId: z.uuid().nullable().optional(),
   seconds: z.number().int().min(10).max(86400).default(300),
   tolerance: z.number().int().min(0).max(60000).nullable().default(50),
   strategy: z.enum(['consistent-hashing', 'round-robin', 'sticky-sessions']).default('consistent-hashing'),
@@ -121,10 +124,6 @@ const base = z.object({
 })
 
 export const draft = z.object({
-  qualityBaselinePolicy: z.discriminatedUnion('mode', [
-    z.strictObject({ mode: z.literal('latest') }), z.strictObject({ mode: z.literal('device'), deviceId: z.uuid() }),
-    z.strictObject({ mode: z.literal('fixed'), reportId: z.uuid() }),
-  ]).optional(),
   sources: array(source), groups: array(group), services: array(service, 1000),
   rules: array(rule, 15000), base,
 }).superRefine((value, ctx) => {

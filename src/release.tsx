@@ -1,13 +1,12 @@
 import type { Diff as UpdateDiff, ProjectedMember, Projection, VersionSummary, WorkspaceState, UpdateLog, EntryKind } from '../shared/model.ts'
-import type { View } from './project.tsx'
 import { asError } from './errors.ts'
 import { useEffect, useRef, useState } from 'react'
 import { Activity, Check, ClipboardCheck, CloudUpload, Download, Link2, Radio, RefreshCw, RotateCcw } from 'lucide-react'
 import { Button as ButtonRoot } from '@/components/ui/button'
 import { regionLabel, ruleTypes } from '../shared/catalog.ts'
+import { hasQualityConditions } from '../shared/group-filter.ts'
 import { ConfigSummary } from './dashboard.tsx'
 import { useConfirm } from './confirm.tsx'
-import { QualityBaselinePicker } from './quality-baseline.tsx'
 import { useProject, useSearchValue } from './project.tsx'
 import { NodeNames } from './sources.tsx'
 import { Alert, Badge, Button, ButtonLink, CopyLinkButton, Disclosure, Empty, IssueList, Modal, NativeSelect, NativeSelectOption, PageTitle, Pager, Panel, RouteLink, Schedule, SearchBox, Segmented, SourceStatus, Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TimeLabel, formatNumber, formatTime, searchable, useListPage, usePage, versionKind, versionLabel } from './ui.tsx'
@@ -66,10 +65,16 @@ function PublishedVersion({ state, download, heading }: { state: WorkspaceState;
 
 export function PublishPage() {
   const { state, view, pathFor, call, applyState, reload, notify, quality } = useProject()
-  const hasQualityPools = state.draft.groups.some(g => g.enabled && g.members.some(m => m.kind === 'pool' && m.quality))
-  const reportChanged = hasQualityPools && !!state.current && quality.ready && quality.reportId !== (state.current.qualityReportId ?? null)
+  const hasQualityPools = state.draft.groups.some(g => g.enabled && g.members.some(m => m.kind === 'pool' && hasQualityConditions(m.quality)))
   const confirm = useConfirm()
-  const [checked, setChecked] = useState<{ revision: number; view: View; result: Projection } | null>(null)
+  const datasetKey = JSON.stringify([
+    Object.entries(state.sources).map(([id, r]) => [id, r.nodesVersion, Boolean(r.pending?.accepted)]),
+    Object.entries(state.providers).map(([id, r]) => [id, r.lastSuccess, r.good?.count ?? 0]),
+  ])
+  const datasetKeyRef = useRef(datasetKey)
+  datasetKeyRef.current = datasetKey
+  const groupsKey = hasQualityPools ? JSON.stringify(view.groups) : ''
+  const [checked, setChecked] = useState<{ revision: number; datasetKey: string; groupsKey: string; result: Projection } | null>(null)
   const [history, setHistory] = useState<{ offset: number; rows: VersionSummary[]; error?: string } | null>(null)
   const [historyOffset, setHistoryOffset] = useState(0)
   const [requestedPreview, setMode] = useSearchValue('preview', state.current && !state.dirty ? 'current' : 'config')
@@ -82,14 +87,16 @@ export function PublishPage() {
   const publishedHeading = useRef<HTMLHeadingElement>(null)
   const version = state.current?.seq
   const mode = version && requestedPreview === 'current' ? 'current' : 'config'
-  const result = checked?.revision === state.revision && checked.view === view ? checked.result : null
+  const result = checked?.revision === state.revision && checked.datasetKey === datasetKey && (!hasQualityPools || checked.groupsKey === groupsKey)
+    ? checked.result
+    : null
   const issues = result?.issues ?? view.issues
   const errors = issues.filter(issue => issue.severity === 'error').length
   const warnings = issues.length - errors
   const currentPreview = current?.seq === version ? current : null
   const preview = mode === 'current' ? currentPreview?.projection : view
   const released = version ? <PublishedVersion state={state} download={pathFor('download')} heading={publishedHeading} /> : null
-  const hasDraftChanges = state.dirty || !version || reportChanged
+  const hasDraftChanges = state.dirty || !version
 
   useEffect(() => {
     if (!version) return
@@ -108,37 +115,45 @@ export function PublishPage() {
   }, [mode, version, previewAttempt, hasQualityPools, call])
 
   async function runCheck() {
+    if (busy) return
+    const requestDatasetKey = datasetKey
     setError('')
     setBusy('check')
     try {
-      const next = await call('check', { expectedQualityReportId: quality.reportId })
-      setChecked({ revision: next.revision, view, result: next })
+      const next = await call('check', {})
+      setChecked({ revision: next.revision, datasetKey: requestDatasetKey, groupsKey: JSON.stringify(next.groups), result: next })
     } catch (cause) { const error = asError(cause); setError(error.message) } finally { setBusy('') }
   }
   async function publish() {
+    if (busy) return
+    const revision = state.revision
     const outcome = state.revoked ? '本次配置将成为当前成品。' : '私有订阅链接将提供本次配置。'
     const detail = (warnings ? `配置检查有 ${formatNumber(warnings)} 项提醒。` : '') + '通过 Mihomo 校验后，' + outcome
     if (!await confirm({ title: '发布配置？', detail, action: '确认发布' })) return
+    if (busy) return
+    const requestDatasetKey = datasetKeyRef.current
     setBusy('publish')
     setError('')
     try {
-      const next = await call('publish', { revision: state.revision, expectedQualityReportId: quality.reportId })
-      applyState(next)
+      const next = await call('publish', { revision })
+      if (!applyState(next)) return
       setChecked(null)
       setMode('current')
       requestAnimationFrame(() => publishedHeading.current?.focus({ preventScroll: true }))
     } catch (cause) {
       const error = asError(cause)
-      if (error.detail && 'issues' in error.detail) setChecked({ revision: state.revision, view, result: error.detail })
+      if (error.detail && 'issues' in error.detail) {
+        setChecked({ revision, datasetKey: requestDatasetKey, groupsKey: JSON.stringify(error.detail.groups), result: error.detail })
+      }
       else setError(error.message)
-      if (error.status === 409) await reload().catch(() => {})
+      if (error.status === 409) await reload(state.id).catch(() => {})
     } finally { setBusy('') }
   }
   async function rollback() {
-    if (!target) return
+    if (busy || !target) return
     setBusy('rollback')
     try {
-      applyState(await call('rollback', { seq: target.seq }))
+      if (!applyState(await call('rollback', { seq: target.seq }))) return
       setTarget(null)
       setMode('current')
       setHistoryOffset(0)
@@ -147,7 +162,7 @@ export function PublishPage() {
   }
   const previousGroups = new Map(currentPreview?.projection?.groups.map(g => [g.id, g]))
   const differences = view.groups.flatMap(g => {
-    if (!state.draft.groups.find(group => group.id === g.id)?.members.some(m => m.kind === 'pool' && m.quality)) return []
+    if (!state.draft.groups.find(group => group.id === g.id)?.members.some(m => m.kind === 'pool' && hasQualityConditions(m.quality))) return []
     const previous = new Map(previousGroups.get(g.id)?.members.map(m => [m.key, m.name]))
     const next = new Map(g.members.map(m => [m.key, m.name]))
     return [{ name: g.name, add: [...next].filter(([key, name]) => previous.get(key) !== name).map(([, name]) => name),
@@ -157,10 +172,11 @@ export function PublishPage() {
   return <div className="stack">
     <PageTitle title="配置发布" />
     {!state.dirty && released}
-    {hasQualityPools && <Panel title="代理组质量差异" actions={<QualityBaselinePicker />}>
-      <div className="panel-padding quality-differences">{reportChanged && <p>所选报告与线上版本使用的报告不同，发布后将采用以下成员。</p>}
-        {currentPreview?.error ? <Alert tone="danger" action={<Button size="small" onClick={() => setPreviewAttempt(v => v + 1)}>重试</Button>}>{currentPreview.error}</Alert>
-          : version && !currentPreview?.projection || !quality.ready ? <p role="status">正在读取质量基准…</p> : differences.map(g => <Disclosure key={g.name} title={g.name + ' · 新增 ' + g.add.length + ' · 移出 ' + g.remove.length}>
+    {hasQualityPools && <Panel title="代理组质量差异">
+      <div className="panel-padding quality-differences">
+        {quality.error ? <Alert tone="danger" action={<Button size="small" onClick={quality.refresh}>重试</Button>}>{quality.error}</Alert>
+          : currentPreview?.error ? <Alert tone="danger" action={<Button size="small" onClick={() => setPreviewAttempt(v => v + 1)}>重试</Button>}>{currentPreview.error}</Alert>
+          : version && !currentPreview?.projection || !quality.ready ? <p role="status">正在读取最新质量记录…</p> : differences.map(g => <Disclosure key={g.name} title={g.name + ' · 新增 ' + g.add.length + ' · 移出 ' + g.remove.length}>
             {!!g.add.length && <p>新增成员　{g.add.join('、')}</p>}{!!g.remove.length && <p>移出成员　{g.remove.join('、')}</p>}{!g.add.length && !g.remove.length && <p>成员与线上版本一致。</p>}
           </Disclosure>)}
       </div></Panel>}
@@ -203,10 +219,10 @@ export function PublishPage() {
               <TableCell className="table-row-title"><strong>{versionLabel(version)}</strong><div className="chips"><Badge tone={version.seq === state.current?.seq ? 'success' : 'neutral'}>
                 {version.seq === state.current?.seq ? '当前版本' : '历史有效'} · {versionKind(version)}</Badge>
                 {version.kind === 'rollback' && <Badge>恢复 v{version.parent}</Badge>}</div></TableCell>
-              <TableCell mobileLabel="发布时间"><TimeLabel value={version.at} />{version.qualityReportId && <small className="muted" title={version.qualityReportId}>质量报告 {version.qualityReportId.slice(0, 8)}</small>}</TableCell>
+              <TableCell mobileLabel="发布时间"><TimeLabel value={version.at} /></TableCell>
               <TableCell className="numeric" mobileLabel="节点 / 组 / 规则">{version.counts.nodes} / {version.counts.groups} / {version.counts.rules}
                 {changes.length > 0 && <small className="muted">{changes.join(' · ')}</small>}</TableCell>
-              <TableCell className="table-row-wide">{version.seq !== state.current?.seq && <Button size="small" icon={RotateCcw} onClick={() => setTarget(version)}>回滚</Button>}</TableCell>
+              <TableCell className="table-row-wide">{version.seq !== state.current?.seq && <Button size="small" icon={RotateCcw} disabled={Boolean(busy)} onClick={() => setTarget(version)}>回滚</Button>}</TableCell>
             </TableRow>
           })}
         </TableBody></Table>
@@ -217,7 +233,7 @@ export function PublishPage() {
       </>}
     </Panel>}
     {target && <Modal title={'回滚至 ' + versionLabel(target)} detail="回滚后，订阅将提供所选版本的配置。"
-      onClose={() => !busy && setTarget(null)} footer={<><Button onClick={() => setTarget(null)} disabled={Boolean(busy)}>取消</Button><Button variant="primary" icon={RotateCcw} busy={busy === 'rollback'} onClick={rollback}>确认回滚</Button></>}>
+      onClose={() => !busy && setTarget(null)} footer={<><Button onClick={() => setTarget(null)} disabled={Boolean(busy)}>取消</Button><Button variant="primary" icon={RotateCcw} busy={busy === 'rollback'} disabled={Boolean(busy && busy !== 'rollback')} onClick={rollback}>确认回滚</Button></>}>
       <div className="stack tight"><p>{formatTime(target.at)} · {target.counts.nodes} 个节点 · {target.counts.groups} 个代理组 · {target.counts.rules} 条规则</p>
         <Alert>回滚会建立一条版本记录。再次发布配置后，订阅将恢复自动更新。</Alert></div>
     </Modal>}
@@ -254,6 +270,7 @@ export function UpdatesPage() {
   }, [call, offset, changeKey, refreshSignature, state.id])
   const visible = records?.slice(0, 50).filter(record => searchable(record.name, query) && (status === 'all' || record.outcome === status)) ?? []
   async function refresh(id?: string, kind?: EntryKind) {
+    if (busy) return
     setBusy(id || 'all')
     try {
       await call('refresh', { id, kind })
@@ -288,8 +305,10 @@ export function UpdatesPage() {
       </article>)}</div>
     </Panel>}
     <Panel title="刷新历史"
-      actions={state.unread && <Button size="small" icon={Check} onClick={async () => {
-        try { await call('updates/read', {}); await reload() } catch (cause) { const error = asError(cause); notify(error.message, 'danger') }
+      actions={state.unread && <Button size="small" icon={Check} busy={busy === 'read'} disabled={Boolean(busy && busy !== 'read')} onClick={async () => {
+        if (busy) return
+        setBusy('read')
+        try { await call('updates/read', {}); await reload() } catch (cause) { const error = asError(cause); notify(error.message, 'danger') } finally { setBusy('') }
       }}>标记已读</Button>}>
       {!!records?.length && <div className="filters panel-padding"><SearchBox placeholder="搜索当前页来源" value={query} onChange={setQuery} />
         <NativeSelect aria-label="刷新结果" value={status} onChange={event => setStatus(event.target.value)}><NativeSelectOption value="all">全部结果</NativeSelectOption><NativeSelectOption value="success">成功</NativeSelectOption><NativeSelectOption value="failed">失败</NativeSelectOption></NativeSelect>
@@ -309,9 +328,9 @@ export function UpdatesPage() {
         </TableBody></Table>}
       {records && (offset > 0 || records.length > 50) && <div className="actions panel-padding"><Button disabled={!offset} onClick={() => setOffset(Math.max(0, offset - 50))}>较新记录</Button><Button disabled={records.length <= 50} onClick={() => setOffset(offset + 50)}>较早记录</Button></div>}
     </Panel>
-    {focus && <Modal title={'刷新详情 · ' + focus.name} detail={formatTime(focus.at)} onClose={() => setFocus(null)} footer={<>
-      {focus.outcome === 'failed' && <Button icon={RefreshCw} busy={busy === focus.entryId} onClick={() => refresh(focus.entryId, focus.kind)}>重试刷新</Button>}
-      <Button onClick={() => setFocus(null)}>关闭</Button></>}>
+    {focus && <Modal title={'刷新详情 · ' + focus.name} detail={formatTime(focus.at)} onClose={() => { if (!busy) setFocus(null) }} footer={<>
+      {focus.outcome === 'failed' && <Button icon={RefreshCw} busy={busy === focus.entryId} disabled={Boolean(busy && busy !== focus.entryId)} onClick={() => refresh(focus.entryId, focus.kind)}>重试刷新</Button>}
+      <Button disabled={Boolean(busy)} onClick={() => setFocus(null)}>关闭</Button></>}>
       <div className="stack"><Alert tone={focus.outcome === 'success' ? 'success' : 'warning'}>{focus.message}</Alert>
         <Diff value={focus.diff} />
         {!!focus.rejected?.length && <Disclosure title={formatNumber(focus.rejected.length) + ' 项无法导入'}>

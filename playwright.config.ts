@@ -1,7 +1,15 @@
-import { defineConfig } from '@playwright/test'
+import { existsSync } from 'node:fs'
+import { chromium, defineConfig } from '@playwright/test'
 
 const port = Number(process.env.SUBMELD_BROWSER_TEST_PORT) || 47891
+const systemBrowsers = [
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+]
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
+  || (existsSync(chromium.executablePath()) ? undefined : systemBrowsers.find(p => existsSync(p)))
 
 export default defineConfig({
   testDir: './test/browser',

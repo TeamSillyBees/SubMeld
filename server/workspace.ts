@@ -1,5 +1,7 @@
 import type { Diff, Draft, EntryKind, Library, Metadata, Profile, Projection, Provider, ProviderData, ProviderMap, ProviderRecord, Source, SourceData, SourceMap, SourceNodes, SourceRecord, SourceSummary, SubscriptionInfo, UpdateLog, Version, VersionSummary, WorkspaceState, WorkspaceStatus } from '../shared/model.ts'
-import { baselineId, qualitySnapshot, type QualitySnapshot } from '../shared/quality-snapshot.ts'
+import type { LatestQualityMap } from '../shared/quality-snapshot.ts'
+import { hasQualityConditions } from '../shared/group-filter.ts'
+import { isSubscriptionNotice } from '../shared/quality-options.ts'
 import { qualitySpaces } from './quality.ts'
 import type { QualityNode } from '../shared/quality.ts'
 import type { Dataset, DocumentRow, StoredRecord } from './records.ts'
@@ -33,7 +35,7 @@ type SourceBrief = Omit<SourceSummary, 'status' | 'next'>
 type ProviderFields = Omit<ProviderRecord, 'status' | 'next'>
 type RecordView = { kind: 'source'; summary: SourceBrief; full?: SourceFields } | { kind: 'provider'; summary: ProviderFields }
 type Snapshot = { metadata: Metadata; status: WorkspaceStatus }
-type Compilation = { qualitySnapshot?: QualitySnapshot | null; yaml: string | null; view: Projection }
+type Compilation = { yaml: string | null; view: Projection }
 type Download = Awaited<ReturnType<typeof download>>
 const sourceData = (data?: Dataset | null) => data && 'nodes' in data ? data : null
 const providerData = (data?: Dataset | null) => data && 'payload' in data ? data : null
@@ -166,6 +168,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
   const work = new Set<Promise<void>>()
   const snapshots = new Map<string, Snapshot>()
   const recordSummaries = new Map<string, Map<string, RecordView>>()
+  const tickListeners = new Set<(now: number) => void>()
   let defaultProfileId: string | undefined
   store.onWrite((space, key) => {
     if (space?.startsWith('quality-')) return
@@ -219,25 +222,15 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
     return { nodes, providers }
   }
 
-  function snapshotFor(profile: Profile, requested?: unknown, recipe = profile.draft): QualitySnapshot | null {
-    const spaces = qualitySpaces(profile.id)
-    const id = requested === undefined ? baselineId(recipe.qualityBaselinePolicy, store.list(spaces.jobs).map(([, job]) => job), activeVersion(profile)) : requested
-    if (id == null) return null
-    const reportId = read(z.uuid(), id)
-    const report = store.get(spaces.reports, reportId)
-    if (report) return qualitySnapshot(report)
-    if (profile.fixedQualitySnapshot?.reportId === reportId) return profile.fixedQualitySnapshot
-    const pinned = activeVersion(profile)?.qualitySnapshot
-    if (pinned?.reportId === reportId) return pinned
-    throw new UserError('这份质量报告已移出历史记录，请重新选择。', 409)
+  function latestQualityFor(profileId: string): LatestQualityMap {
+    const byDevice: LatestQualityMap = {}
+    for (const [, record] of store.list(qualitySpaces(profileId).latest)) {
+      (byDevice[record.deviceId] ??= {})[record.nodeKey] = record
+    }
+    return byDevice
   }
-  function previewSnapshot(profile: Profile, requested?: unknown, expected?: unknown, recipe = profile.draft) {
-    const snapshot = snapshotFor(profile, recipe.qualityBaselinePolicy ? undefined : requested, recipe)
-    const displayed = expected !== undefined ? expected : recipe.qualityBaselinePolicy ? requested : undefined
-    if (displayed !== undefined && displayed !== (snapshot?.reportId ?? null)) throw new UserError('质量基准已更新，请重新读取报告并确认预览。', 409)
-    return snapshot
-  }
-  async function compile(profile: Profile, recipe: Draft, useDraft: boolean, quality: QualitySnapshot | null, replacement?: { key: string; data: Dataset }): Promise<Compilation> {
+
+  async function compile(profile: Profile, recipe: Draft, useDraft: boolean, quality: LatestQualityMap | null, replacement?: { key: string; data: Dataset }): Promise<Compilation> {
     const { nodes, providers } = dataFor(profile, recipe, useDraft, replacement)
     const compiled = evaluate(recipe, nodes, providers, true, quality)
     const secrets = getAllSecrets([
@@ -254,15 +247,14 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
     if (coreIssue) compiled.issues.push(coreIssue)
     const { config, ...projection } = compiled
     const view = redact({ ...projection, nodes: projection.nodes.filter(node => node.kept) }, secrets)
-    return { yaml: coreIssue ? null : yaml, view, qualitySnapshot: quality }
+    return { yaml: coreIssue ? null : yaml, view }
   }
 
   function insertVersion(profile: Profile, recipe: Draft, compiled: Compilation, kind: Version['kind'], parent: number | null = null) {
     const version = {
       seq: (store.history(versionSpace(profile), 1, 0)[0]?.seq ?? 0) + 1,
       at: timestamp(), kind, parent, counts: compiled.view.counts, yaml: compiled.yaml!,
-      recipe, view: compiled.view, qualitySnapshot: compiled.qualitySnapshot ?? null, qualityReportId: compiled.qualitySnapshot?.reportId ?? null,
-      qualityDeviceId: compiled.qualitySnapshot?.targetDeviceId ?? null,
+      recipe, view: compiled.view,
     }
     store.set(versionSpace(profile), versionKey(version.seq), version)
     profile.active = version.seq
@@ -272,7 +264,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
 
   function summarize(version: Version | null): VersionSummary | null {
     if (!version) return null
-    const { yaml, recipe, view, qualitySnapshot, ...summary } = version
+    const { yaml, recipe, view, ...summary } = version
     return summary
   }
 
@@ -485,8 +477,6 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
       const profile = profileFor(profileId)
       checkRevision(profile, body.revision)
       const draft = resolveDraft(profile, body.draft)
-      const policy = draft.qualityBaselinePolicy
-      const fixed = policy?.mode === 'fixed' ? snapshotFor(profile, policy.reportId) : null
       const structural = structuralGroupIssues(draft)
       if (structural.size) throw new UserError([...structural.values()][0], 422, { id: [...structural.keys()][0] })
       const removedGroups = new Set(profile.draft.groups.filter(previous => !draft.groups.some(group => group.id === previous.id)).map(group => group.id))
@@ -526,7 +516,6 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
           const onlyRenewals = profile.revision === profile.publishedRevision
             && compareDigest(publicationRecipe(profile.draft)) === compareDigest(publicationRecipe(draft))
           profile.draft = draft
-          profile.fixedQualitySnapshot = fixed ?? undefined
           profile.revision++
           if (onlyRenewals) profile.publishedRevision = profile.revision
           store.set('profiles', profile.id, profile)
@@ -536,16 +525,16 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
     })
   }
 
-  function check(profileId: ProfileId, reportId?: unknown, expected?: unknown) {
+  function check(profileId: ProfileId) {
     const profile = profileFor(profileId)
-    return compile(profile, profile.draft, true, previewSnapshot(profile, reportId, expected)).then(result => ({ revision: profile.revision, ...result.view }))
+    return compile(profile, profile.draft, true, latestQualityFor(profile.id)).then(result => ({ revision: profile.revision, ...result.view }))
   }
 
-  function publish(profileId: ProfileId, revision: unknown, reportId?: unknown, expected?: unknown) {
+  function publish(profileId: ProfileId, revision: unknown) {
     return mutate(async () => {
       const profile = profileFor(profileId)
       checkRevision(profile, revision)
-      const result = await compile(profile, profile.draft, true, previewSnapshot(profile, reportId, expected))
+      const result = await compile(profile, profile.draft, true, latestQualityFor(profile.id))
       if (!result.yaml) throw new UserError('检查未通过，当前订阅继续使用上一份成品。', 422, result.view)
       store.transaction(() => {
         for (const job of jobsFor(profile.draft).filter(job => job.enabled)) {
@@ -557,25 +546,26 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
         profile.publishedRevision = profile.revision
         if (!profile.revoked && !profile.token) profile.token = randomBytes(32).toString('base64url')
         const recipe = publicationRecipe(profile.draft)
-        // Older clients explicitly selected a snapshot for this publication.
-        if (!recipe.qualityBaselinePolicy && reportId === undefined) recipe.qualityBaselinePolicy = { mode: 'latest' }
         insertVersion(profile, recipe, result, 'publish')
       })
       return state(profile.id)
     })
   }
 
-  function refreshQuality(profileId: string) {
+  function refreshQuality(profileId: string, options?: { trigger?: 'manual' | 'schedule' }) {
     return mutate(async () => {
       const profile = profileFor(profileId)
+      if (options?.trigger === 'schedule') {
+        const schedule = store.get(qualitySpaces(profile.id).schedules, 'config')
+        if (schedule && !schedule.autoRefreshGroups) return
+      }
       const active = activeVersion(profile)
-      const policy = active?.recipe.qualityBaselinePolicy
-      if (!active || active.kind === 'rollback' || !policy || policy.mode === 'fixed' ||
-          !active.recipe.groups.some(g => g.enabled && g.members.some(m => m.kind === 'pool' && m.quality))) return
-      const snapshot = snapshotFor(profile, undefined, active.recipe)
-      if (!snapshot || snapshot.reportId === active.qualityReportId) return
-      const compiled = await compile(profile, active.recipe, false, snapshot)
-      if (compiled.yaml) store.transaction(() => insertVersion(profile, active.recipe, compiled, 'auto', active.seq))
+      if (!active || active.kind === 'rollback' ||
+          !active.recipe.groups.some(g => g.enabled && g.members.some(m => m.kind === 'pool' && hasQualityConditions(m.quality)))) return
+      const compiled = await compile(profile, active.recipe, false, latestQualityFor(profile.id))
+      if (compiled.yaml && compiled.yaml !== active.yaml) {
+        store.transaction(() => insertVersion(profile, active.recipe, compiled, 'auto', active.seq))
+      }
     })
   }
 
@@ -623,9 +613,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
         }
       }
       if (data && !message && current.recipe && active && active.kind !== 'rollback') {
-        const policy = active.recipe.qualityBaselinePolicy
-        const quality = policy && policy.mode !== 'fixed' ? snapshotFor(profile, undefined, active.recipe) : active.qualitySnapshot ?? null
-        result = await compile(profile, active.recipe, false, quality, { key: job.key, data })
+        result = await compile(profile, active.recipe, false, latestQualityFor(profile.id), { key: job.key, data })
         if (!result.yaml) {
           message = '更新未通过配置检查。' + (result.view.issues.find(issue => issue.severity === 'error')?.message ?? '')
         }
@@ -700,8 +688,8 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
     return true
   }
 
-  function tick() {
-    const now = timestamp()
+  function tick(nowMs = Date.now()) {
+    const now = new Date(nowMs).toISOString()
     for (const [, profile] of store.list('profiles')) {
       for (const job of plan(profile).filter(job => job.enabled && !job.paused)) {
         const record = store.get(dataSpace(profile), job.key)
@@ -710,6 +698,9 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
       }
     }
     drain()
+    for (const listener of tickListeners) {
+      try { listener(nowMs) } catch { console.error('SubMeld: tick listener failed.') }
+    }
   }
   const timer = tickMs > 0 ? setInterval(() => {
     try { tick() } catch { console.error('SubMeld: scheduler could not read its work queue.') }
@@ -732,7 +723,23 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
         })
       })
     },
-    probe, saveDraft, snapshotFor, refreshQuality, check, publish, rollback, tick, profileFor, activeVersion,
+    selectQualityScope(profile: Profile, scope: 'kept' | 'all'): QualityNode[] {
+      const secrets = getAllSecrets()
+      return profile.draft.sources.flatMap(source => {
+        const data = draftDataset(store.get(dataSpace(profile), datasetKey('source', source)))
+        return filterNodes(source, data).flatMap(node => {
+          if (scope === 'kept' && !node.kept) return []
+          if (!node.raw.connection) return []
+          const name = redact(node.name, secrets)
+          if (isSubscriptionNotice(name) || isSubscriptionNotice(node.originalName) || isSubscriptionNotice(String(node.raw.connection.name ?? ''))) return []
+          return [{ key: node.key, name, sourceName: redact(source.name, secrets), connection: node.raw.connection }]
+        })
+      })
+    },
+    onTick(listener: (now: number) => void) {
+      tickListeners.add(listener)
+    },
+    probe, saveDraft, refreshQuality, check, publish, rollback, tick, profileFor, activeVersion,
     claimRenewalReminders(profileId: ProfileId, body: Body) {
       const timeZone = read(z.string().min(1).max(100), body.timeZone)
       const requested = new Set(read(z.array(z.string().max(75)).max(200), body.dates))
@@ -756,6 +763,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
     },
     async stop() {
       if (timer) clearInterval(timer)
+      tickListeners.clear()
       pending.length = 0
       await Promise.allSettled([...work])
       await serialization
@@ -791,7 +799,7 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
       const draft = body.draft ? resolveDraft(profile, body.draft) : profile.draft
       const input = String(body.domain ?? '').slice(0, 2048)
       const { nodes, providers } = dataFor(profile, draft, true, null, owner)
-      const projection = evaluate(draft, nodes, providers, false, previewSnapshot(profile, body.qualityReportId, undefined, draft))
+      const projection = evaluate(draft, nodes, providers, false, latestQualityFor(profile.id))
       return redact({
         ...(body.draft && !input.trim() ? { checkedOnly: true } : await matchDomain(projection, input, providers, draft.base.mode)),
         issues: projection.issues.filter(issue => issue.pane === 'rules' && (!body.serviceId || issue.id === body.serviceId)).slice(0, 10),
@@ -884,14 +892,9 @@ export function createWorkspace({ store, verify, remote, loadRuleSetList, tickMs
         }
         if (input.action !== 'create' && input.action !== 'clone') throw new UserError('未知的方案操作。')
         if (store.list('profiles').length >= 30) throw new UserError('最多可保存 30 个独立配置方案。')
-        const next = makeProfile(title(), input.action === 'clone' ? profile.draft : blankDraft())
-        if (input.action === 'clone') {
-          const quality = snapshotFor(profile)
-          if (quality) {
-            next.fixedQualitySnapshot = quality
-            next.draft = { ...next.draft, qualityBaselinePolicy: { mode: 'fixed', reportId: quality.reportId } }
-          } else delete next.draft.qualityBaselinePolicy
-        }
+        const next = makeProfile(title(), input.action === 'clone'
+          ? { ...profile.draft, groups: profile.draft.groups.map(({ qualityDeviceId: _, ...g }) => g) }
+          : blankDraft())
         store.transaction(() => {
           store.set('profiles', next.id, next)
           if (input.action === 'clone') {

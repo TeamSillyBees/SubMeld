@@ -110,13 +110,18 @@ async function readExit(outlet: Outlet, signal: AbortSignal, target: string, bud
   return null
 }
 
+export async function measureExit(outlet: Outlet, signal: AbortSignal, endpoints = targets): Promise<QualityRow['exit']> {
+  let exit = await readExit(outlet, signal, endpoints.exit, [5000, 3000])
+  if (!exit && endpoints.exitFallback) exit = await readExit(outlet, signal, endpoints.exitFallback, [5000, 3000])
+  return exit
+}
+
 export async function measureLatency(key: string, outlet: Outlet, config: QualityConfig, signal: AbortSignal, endpoints = targets): Promise<QualityRow> {
   await sample(outlet, signal, endpoints.latency)
   const samples: LatencySample[] = []
   for (let i = 0; i < config.rounds; i++) samples.push(await sample(outlet, signal, endpoints.latency))
   const metrics = summarize(samples)
-  let exit = metrics.available ? await readExit(outlet, signal, endpoints.exit, [5000, 3000]) : null
-  if (metrics.available && !exit && endpoints.exitFallback) exit = await readExit(outlet, signal, endpoints.exitFallback, [6000])
+  const exit = metrics.available ? await measureExit(outlet, signal, endpoints) : null
   const error = samples.some(s => s.httpStatus != null) ? 'unexpected_status'
     : metrics.tlsMedianMs != null ? 'https_no_response' : 'no_response'
   return { key, samples, ...metrics, error: metrics.available ? null : error,

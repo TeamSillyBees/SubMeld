@@ -20,7 +20,7 @@ export function SettingsPage() {
   const [form, setForm] = useState(() => structuredClone(original))
   const [advancedText, setAdvancedText] = useState(() => JSON.stringify(original.advanced ?? {}, null, 2))
   const [fieldKey, setFieldKey] = useState(0)
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<'' | 'save' | 'library'>('')
   const [error, setError] = useState('')
   const lastField = useRef<HTMLElement>(null)
   const dirty = JSON.stringify(form) !== JSON.stringify(original) || advancedText !== JSON.stringify(original.advanced ?? {}, null, 2)
@@ -52,7 +52,8 @@ export function SettingsPage() {
   }
 
   async function submit() {
-    setBusy(true)
+    if (busy) return
+    setBusy('save')
     setError('')
     try {
       const advanced = JSON.parse(advancedText.trim() || '{}')
@@ -60,7 +61,7 @@ export function SettingsPage() {
       const base = { ...form, advanced: Object.keys(advanced).length ? advanced : undefined }
       finishEdit(await save({ ...state.draft, base }, basedOn, '基础设置已更新'))
     } catch (cause) { const error = asError(cause); setError(error instanceof SyntaxError ? '高级配置需要有效的 JSON 对象。' : error.message) }
-    finally { setBusy(false) }
+    finally { setBusy('') }
   }
   const dnsChoices = [['default', '系统 DNS'], ['encrypted', '加密 DNS · Fake IP'], ['real', '真实 IP · Redir-Host']]
   const { nameserverPolicy, ...presetFields } = form.dns
@@ -72,11 +73,11 @@ export function SettingsPage() {
   return <div className="stack config-page">
     <h1 className="sr-only" tabIndex={-1}>基础设置</h1>
     <Panel title={<>基础配置 <code className="tech-chip">{form.mode} · {form.dns.enabled ? form.dns.mode : '系统 DNS'}</code></>}
-      actions={<Button size="small" icon={Check} disabled={!dirty || busy} onClick={submit}>保存基础设置</Button>}>
+      actions={<Button size="small" icon={Check} disabled={!dirty || Boolean(busy)} onClick={submit}>保存基础设置</Button>}>
       <div className="config-toolbar" onFocusCapture={rememberField}><div className="template-strip"><SlidersHorizontal aria-hidden="true" /><span>DNS 预设</span>
-        {dnsChoices.map(([id, label]) => <Button size="small" key={id} aria-pressed={selectedPreset === id} disabled={busy} onClick={() => applyDnsPreset(id)}>{label}</Button>)}</div></div>
+        {dnsChoices.map(([id, label]) => <Button size="small" key={id} aria-pressed={selectedPreset === id} disabled={Boolean(busy)} onClick={() => applyDnsPreset(id)}>{label}</Button>)}</div></div>
     </Panel>
-    <div className="settings-grid" inert={busy} onFocusCapture={rememberField} onChangeCapture={rememberField}>
+    <div className="settings-grid" inert={Boolean(busy)} onFocusCapture={rememberField} onChangeCapture={rememberField}>
       <Panel title="连接与端口">
         <div className="panel-padding stack">
           {issues.filter(issue => issue.code === 'base-ports').map(issue => <Alert key={issue.code} tone="danger">{issue.message}</Alert>)}
@@ -135,17 +136,22 @@ export function SettingsPage() {
     </div>
     {state.library.filters.length > 0 && <Panel title="筛选模板">
       <div className="panel-padding stack tight">{state.library.filters.map(template => <div className="list-option" key={template.id}>
-        <strong>{template.name}</strong><IconButton icon={Trash2} label={'删除筛选模板 ' + template.name} onClick={async () => {
+        <strong>{template.name}</strong><IconButton icon={Trash2} label={'删除筛选模板 ' + template.name} disabled={Boolean(busy)} onClick={async () => {
+          if (busy) return
           if (!await confirm({ title: '删除筛选模板？', detail: '已应用此模板的订阅源会保留其筛选条件。', action: '删除模板', danger: true })) return
-          try { applyState(await call('library', { ...state.library, filters: state.library.filters.filter(item => item.id !== template.id) })); notify('筛选模板已删除') } catch (cause) { const error = asError(cause); notify(error.message, 'danger') }
+          if (busy) return
+          setBusy('library')
+          try { if (applyState(await call('library', { ...state.library, filters: state.library.filters.filter(item => item.id !== template.id) }))) notify('筛选模板已删除') }
+          catch (cause) { const error = asError(cause); notify(error.message, 'danger') }
+          finally { setBusy('') }
         }} />
       </div>)}</div>
     </Panel>}
     {dirty && <div className="settings-save-bar">
       {error && <Alert tone="danger">{error}</Alert>}
       <div className="actions">
-        <Button icon={RotateCcw} variant="ghost" disabled={busy} onClick={() => finishEdit(state)}>撤销更改</Button>
-        <Button icon={Check} variant="primary" busy={busy} onClick={submit}>保存设置</Button>
+        <Button icon={RotateCcw} variant="ghost" disabled={Boolean(busy)} onClick={() => finishEdit(state)}>撤销更改</Button>
+        <Button icon={Check} variant="primary" busy={busy === 'save'} disabled={Boolean(busy && busy !== 'save')} onClick={submit}>保存设置</Button>
       </div>
     </div>}
   </div>
@@ -161,7 +167,8 @@ function PasswordDialog({ onClose }: { onClose: () => void }) {
   const guard = useUnsavedChanges(Boolean(current || password || repeat), '已输入的密码会从此表单清除。')
   const close = () => { if (!busy) return guard.close(onClose) }
   return <Modal title="更改管理密码" detail="更改后，其他管理页面需要重新登录。" onClose={close} footer={<>
-    <Button onClick={close}>取消</Button><Button variant="primary" busy={busy} onClick={async () => {
+    <Button disabled={Boolean(busy)} onClick={close}>取消</Button><Button variant="primary" busy={busy} onClick={async () => {
+      if (busy) return
       if (!current || password.length < 10) return setError('请填写当前密码及至少 10 个字符的新密码。')
       if (password !== repeat) return setError('两次输入的新密码不一致。')
       setBusy(true)
@@ -169,7 +176,7 @@ function PasswordDialog({ onClose }: { onClose: () => void }) {
       catch (cause) { const error = asError(cause); setError(error.message) } finally { setBusy(false) }
     }}>更改密码</Button>
   </>}>
-    <FieldGroup>{error && <Alert tone="danger">{error}</Alert>}
+    <FieldGroup inert={busy}>{error && <Alert tone="danger">{error}</Alert>}
       <Field label="当前密码"><Input type="password" autoComplete="current-password" value={current} onChange={event => setCurrent(event.target.value)} /></Field>
       <Field label="新密码" hint="至少 10 个字符"><Input type="password" autoComplete="new-password" value={password} onChange={event => setPassword(event.target.value)} /></Field>
       <Field label="确认新密码"><Input type="password" autoComplete="new-password" value={repeat} onChange={event => setRepeat(event.target.value)} /></Field>
@@ -188,14 +195,16 @@ function BackupDialog({ mode, onClose }: { mode: string; onClose: () => void }) 
   const guard = useUnsavedChanges(Boolean(password || file), '已选择的备份文件和口令会从此表单清除。')
   const close = () => { if (!busy) return guard.close(onClose) }
   async function commit() {
+    if (busy) return
     if (restore && !await confirm({ title: '恢复备份并替换配置？', detail: '当前方案、历史版本和节点缓存都会被替换。恢复后需重新生成私有订阅链接。', action: '恢复备份', danger: true })) return
+    if (busy) return
     setError('')
     setBusy(true)
     try {
       if (restore) {
         if (!file) return
         const backup = JSON.parse(await file.text())
-        applyState(await call('backup/import', { backup, passphrase: password }))
+        applyState(await call('backup/import', { backup, passphrase: password }), { allowProfileSwitch: true })
         notify('备份已恢复，私有链接可重新生成')
       } else {
         const result = await call('backup/export', { passphrase: password })
@@ -208,7 +217,7 @@ function BackupDialog({ mode, onClose }: { mode: string; onClose: () => void }) 
   return <Modal title={restore ? '从备份恢复' : '导出加密备份'} onClose={close}
     footer={<><Button disabled={busy} onClick={close}>取消</Button><Button variant={restore ? 'danger' : 'primary'} icon={restore ? Upload : Download} busy={busy}
       disabled={password.length < 10 || restore && !file} onClick={commit}>{restore ? '恢复备份' : '下载备份'}</Button></>}>
-    <FieldGroup>
+    <FieldGroup inert={busy}>
       <Alert tone={restore ? 'warning' : 'info'}>{restore
         ? '恢复会替换全部配置方案及历史版本，保留当前管理密码。原私有链接将失效，恢复后需生成新的订阅链接。'
         : '文件包含订阅源凭证、节点连接参数、配置和发布历史。请将口令与文件分开保存。'}</Alert>
@@ -255,7 +264,9 @@ export function SafetyPage() {
               onFocus={event => { if (link) event.target.select() }} actions={<>
                 <InputAction icon={link ? EyeOff : Eye} label={link ? '遮挡私有链接' : '显示私有链接'} disabled={busy} onClick={() => link ? setLink('') : manage()} />
                 <InputAction icon={Copy} label="复制私有链接" disabled={busy} onClick={async () => {
-                  try { const { url } = await call('link'); if (url) { await copyText(url); notify('私有链接已复制') } } catch (cause) { const error = asError(cause); notify(error.message, 'danger') }
+                  if (busy) return
+                  setBusy(true)
+                  try { const { url } = await call('link'); if (url) { await copyText(url); notify('私有链接已复制') } } catch (cause) { const error = asError(cause); notify(error.message, 'danger') } finally { setBusy(false) }
                 }} />
               </>} />
           </Field>}

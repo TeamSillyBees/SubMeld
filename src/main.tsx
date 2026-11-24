@@ -1,16 +1,18 @@
 import type { ReactNode, ComponentType, FormEvent } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import type { Draft, Issue, WorkspaceState } from '../shared/model.ts'
+import type { ProbeDevice } from '../shared/quality.ts'
+import { hasQualityConditions } from '../shared/group-filter.ts'
+import { latestQualitySnapshot, type LatestQualityMap } from '../shared/quality-snapshot.ts'
 import { api, type Call, type Endpoint, type LocalInput, type Payload, type ResponseFor, type Session } from './api.ts'
-import type { ChangeProfile, Destination, Feedback, NavigationGuard, ProfileAction, Route, View } from './project.tsx'
+import type { ChangeProfile, Destination, Feedback, NavigationGuard, ProfileAction, ProjectQuality, Route, View } from './project.tsx'
 import { asError } from './errors.ts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useQualityBaseline } from './quality-baseline.tsx'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 import logo from '../docs/assets/submeld-logo.svg'
 import { setNonce } from 'get-nonce'
-import { Activity, CircleHelp, Filter, GitFork, History, Layers3, Link2, LogOut, Send, Server, Settings2, ShieldCheck } from 'lucide-react'
+import { Activity, CircleHelp, Filter, Gauge, GitFork, History, Layers3, Link2, LogOut, Send, Server, Settings2, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage } from '@/components/ui/breadcrumb'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,9 +24,11 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { ConfirmProvider } from './confirm.tsx'
 import { Dashboard } from './dashboard.tsx'
 import { GroupsPage } from './groups.tsx'
+import { createFeedbackNotifier } from './notify.ts'
 import { ProfileNameDialog, ProfileSelector, type NameAction } from './profiles.tsx'
 import { ProjectContext, projection } from './project.tsx'
 import { PublishPage, UpdatesPage } from './release.tsx'
+import { QualityPage } from './quality-page.tsx'
 import { RulesPage } from './rules.tsx'
 import { SafetyPage, SettingsPage } from './settings.tsx'
 import { NodesPage, SourcesPage } from './sources.tsx'
@@ -40,6 +44,7 @@ const pages: [string, string, LucideIcon, ComponentType][] = [
   ['sources', '订阅源', Server, SourcesPage],
   ['nodes', '节点管理', Filter, NodesPage],
   ['groups', '代理组', Layers3, GroupsPage],
+  ['quality', '质量检测', Gauge, QualityPage],
   ['rules', '路由规则', GitFork, RulesPage],
   ['settings', '基础设置', Settings2, SettingsPage],
   ['publish', '配置发布', Send, PublishPage],
@@ -49,8 +54,8 @@ const pages: [string, string, LucideIcon, ComponentType][] = [
 
 const sections: [string, typeof pages][] = [
   ['订阅分发', pages.slice(0, 2)],
-  ['聚合与分流', pages.slice(2, 5)],
-  ['系统与发布', pages.slice(5)],
+  ['聚合与分流', pages.slice(2, 6)],
+  ['系统与发布', pages.slice(6)],
 ]
 
 function routeFromHash(hash = location.hash) {
@@ -218,6 +223,74 @@ function WorkspaceLayout({ state, view, route, changeProfile, signOut, onHelp, c
   </>
 }
 
+const emptyLatest: LatestQualityMap = {}
+const emptyDevices: ProbeDevice[] = []
+
+function useLatestQuality(state: WorkspaceState | null, call: Call): ProjectQuality {
+  const profileId = state?.id
+  const [data, setData] = useState<{ profileId: string; latest: LatestQualityMap; devices: ProbeDevice[]; latestJson: string; devicesJson: string }>()
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
+  useEffect(() => {
+    if (!profileId) {
+      setData(undefined)
+      return
+    }
+    const id = profileId
+    let alive = true, timer: ReturnType<typeof setTimeout>
+    setError('')
+    async function poll() {
+      try {
+        const [latest, devices] = await Promise.all([call('quality/latest'), call('quality/devices')])
+        if (!alive) return
+        const latestJson = JSON.stringify(latest)
+        const devicesJson = JSON.stringify(devices)
+        setData(prev => {
+          if (prev && prev.profileId === id && prev.latestJson === latestJson && prev.devicesJson === devicesJson) {
+            return prev
+          }
+          return {
+            profileId: id,
+            latest: prev?.profileId === id && prev.latestJson === latestJson ? prev.latest : latest,
+            devices: prev?.profileId === id && prev.devicesJson === devicesJson ? prev.devices : devices,
+            latestJson,
+            devicesJson,
+          }
+        })
+        setError('')
+      } catch (e) { if (alive) setError(asError(e).message) }
+      if (alive) timer = setTimeout(poll, 8000)
+    }
+    void poll()
+    return () => { alive = false; clearTimeout(timer) }
+  }, [call, profileId, attempt])
+  const scoped = profileId && data?.profileId === profileId ? data : null
+  const latest = scoped ? scoped.latest : emptyLatest
+  const devices = scoped ? scoped.devices : emptyDevices
+  const deviceNames = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const d of devices) map.set(d.id, d.remark || d.name)
+    for (const deviceId of Object.keys(latest)) {
+      if (!map.has(deviceId)) map.set(deviceId, '历史探针')
+    }
+    return map
+  }, [devices, latest])
+  const snapshotFor = useCallback((deviceId?: string | null) => {
+    if (!deviceId || !Object.hasOwn(latest, deviceId)) return null
+    const snapshot = latestQualitySnapshot(latest[deviceId], deviceId)
+    return { ...snapshot, targetDeviceName: deviceNames.get(deviceId) ?? null }
+  }, [latest, deviceNames])
+  const hasData = useMemo(() => Object.values(latest).some(rows => Object.keys(rows).length > 0), [latest])
+  const refresh = useCallback(() => setAttempt(n => n + 1), [])
+  return useMemo(() => ({
+    latest, devices, deviceNames, hasData,
+    ready: Boolean(scoped) && !error,
+    error,
+    refresh,
+    snapshotFor,
+  }), [latest, devices, deviceNames, hasData, scoped, error, refresh, snapshotFor])
+}
+
 function App() {
   const [session, setSession] = useState<Session | null>(null)
   const [sessionError, setSessionError] = useState('')
@@ -226,16 +299,26 @@ function App() {
   const [help, setHelp] = useState(false)
   const profile = useRef(localStorage.getItem('submeld.profile') || '')
   const requestOrder = useRef(0)
+  const switchOrder = useRef(0)
+  const switchInFlight = useRef(0)
   const navigationGuard = useRef<NavigationGuard | null>(null)
   const previousHash = useRef(location.hash)
   const permittedHash = useRef<string | null>(null)
   const latestState = useRef<WorkspaceState | null>(null)
   const loadingRequest = useRef<number | null>(null)
 
-  const notify = useCallback((message: string, tone: Feedback = 'success') => {
-    const show = { danger: toast.error, warning: toast.warning, info: toast.info, success: toast.success }[tone] ?? toast
-    show(message, { id: 'workspace-feedback', duration: tone === 'danger' ? 6500 : 2800 })
-  }, [])
+  const notifier = useMemo(() => createFeedbackNotifier({
+    dismiss: () => toast.dismiss(),
+    show: (message, tone, duration) => {
+      const show = { danger: toast.error, warning: toast.warning, info: toast.info, success: toast.success }[tone] ?? toast
+      return show(message, { duration })
+    },
+  }), [])
+  useEffect(() => {
+    notifier.activate()
+    return () => notifier.dispose()
+  }, [notifier])
+  const notify = notifier.notify
 
   const setNavigationGuard = useCallback((handler: NavigationGuard | null) => {
     navigationGuard.current = handler
@@ -244,14 +327,19 @@ function App() {
 
   const pathFor = useCallback((path: string, id = profile.current) => '/api/' + path + (id ? (path.includes('?') ? '&' : '?') + 'profile=' + encodeURIComponent(id) : ''), [])
 
-  const applyState = useCallback((next: WorkspaceState) => {
+  const applyState = useCallback((next: WorkspaceState, options?: { allowProfileSwitch?: boolean }) => {
+    if (!next?.draft) return false
+    const allowSwitch = options?.allowProfileSwitch === true
+    if (!allowSwitch && (switchInFlight.current > 0 || (profile.current && next.id !== profile.current))) {
+      return false
+    }
     requestOrder.current++
-    if (!next?.draft) return
-    if (latestState.current?.statusVersion === next.statusVersion && latestState.current?.id === next.id) return
+    if (latestState.current?.statusVersion === next.statusVersion && latestState.current?.id === next.id) return true
     latestState.current = next
     if (profile.current !== next.id) localStorage.setItem('submeld.profile', next.id)
     profile.current = next.id
     setState(next)
+    return true
   }, [])
 
   const clearState = useCallback(() => {
@@ -272,7 +360,8 @@ function App() {
     }
   }, [pathFor, clearState])
 
-  const reload = useCallback(async (id = profile.current, background = false) => {
+  const reload = useCallback(async (id = profile.current, background = false, allowProfileSwitch = false) => {
+    if (!allowProfileSwitch && (switchInFlight.current > 0 || (profile.current && id !== profile.current))) return
     if (background && loadingRequest.current !== null) return
     const order = ++requestOrder.current
     loadingRequest.current = order
@@ -280,7 +369,7 @@ function App() {
     const get = <P extends 'state' | 'status' | 'state?nodes=0' | `source-nodes?id=${string}`>(path: P) => api<ResponseFor<P>>(pathFor(path, id))
     try {
       const next = previous && previous.id === id ? await refreshWorkspace(previous, get) : await get('state')
-      if (order === requestOrder.current && next !== previous) applyState(next)
+      if (order === requestOrder.current && next !== previous) applyState(next, { allowProfileSwitch })
     } catch (cause) {
       const error = asError(cause)
       if (order !== requestOrder.current) return
@@ -288,8 +377,12 @@ function App() {
         clearState()
         setSession({ authenticated: false, configured: true })
       } else if (id && error.status === 404) {
-        const next = await api<WorkspaceState>('/api/state')
-        if (order === requestOrder.current) applyState(next)
+        if (!background && (allowProfileSwitch || (switchInFlight.current === 0 && (!latestState.current || id === profile.current)))) {
+          const next = await api<WorkspaceState>('/api/state')
+          if (order === requestOrder.current && (allowProfileSwitch || switchInFlight.current === 0)) {
+            applyState(next, { allowProfileSwitch: true })
+          }
+        }
       } else throw error
     } finally {
       if (loadingRequest.current === order) loadingRequest.current = null
@@ -365,9 +458,12 @@ function App() {
       const target = event.target
       if (document.querySelector('[role="dialog"],[role="alertdialog"],[role="menu"]') ||
         (target instanceof HTMLElement && (/^(input|textarea|select)$/i.test(target.tagName) || target.isContentEditable))) return
-      if (event.altKey && /^[1-9]$/.test(event.key)) {
-        event.preventDefault()
-        void navigate(pages[Number(event.key) - 1][0])
+      if (event.altKey && /^[0-9]$/.test(event.key)) {
+        const index = event.key === '0' ? 9 : Number(event.key) - 1
+        if (pages[index]) {
+          event.preventDefault()
+          void navigate(pages[index][0])
+        }
       }
       if (event.key === '?') setHelp(true)
     }
@@ -376,14 +472,15 @@ function App() {
   }, [Boolean(state), navigate])
 
   const save = useCallback(async (draft: Draft, revision = state!.revision, message?: string, localInputs?: Record<string, LocalInput>) => {
+    const targetProfile = profile.current
     try {
       const next = await call('draft', { revision, draft, localInputs })
-      applyState(next)
+      if (!applyState(next)) return next
       if (message) notify(message)
       return next
     } catch (cause) {
       const error = asError(cause)
-      if (error.status === 409) await reload().catch(() => {})
+      if (error.status === 409) await reload(targetProfile).catch(() => {})
       throw error
     }
   }, [state?.revision, call, applyState, notify, reload])
@@ -392,10 +489,26 @@ function App() {
     const changesWorkspace = action !== 'rename'
     if (changesWorkspace && navigationGuard.current && !await navigationGuard.current()) return false
     if (action === 'switch') {
-      await reload(value)
-      if (!latestState.current) return false
+      const mySwitch = ++switchOrder.current
+      switchInFlight.current++
+      try {
+        await reload(value, false, true)
+      } finally {
+        switchInFlight.current--
+      }
+      if (mySwitch !== switchOrder.current || !latestState.current || (value && latestState.current.id !== value)) return false
       notify('已切换至「' + latestState.current.title + '」')
-    } else applyState(await call('profiles', { action, title: value }))
+    } else {
+      const mySwitch = ++switchOrder.current
+      if (changesWorkspace) switchInFlight.current++
+      try {
+        const next = await call('profiles', { action, title: value })
+        if (mySwitch !== switchOrder.current) return false
+        applyState(next, { allowProfileSwitch: changesWorkspace })
+      } finally {
+        if (changesWorkspace) switchInFlight.current--
+      }
+    }
     if (changesWorkspace) {
       navigationGuard.current = null
       await navigate('home')
@@ -415,8 +528,18 @@ function App() {
     Object.values(state.sources).map(record => record.nodesVersion),
     Object.values(state.providers).map(record => record.good),
   ])
-  const quality = useQualityBaseline(state, call, save)
-  const view = useMemo(() => state ? projection(state.draft, state, quality.snapshot) : null, [state?.draft, datasetVersions, quality.snapshot])
+  const quality = useLatestQuality(state, call)
+  const hasQualityPools = Boolean(state?.draft.groups.some(g => g.enabled && g.members.some(m => m.kind === 'pool' && hasQualityConditions(m.quality))))
+  const qualityConsumingRoute = route.page === 'nodes' || route.page === 'groups' || (route.page === 'publish' && hasQualityPools)
+  const prevRoutePage = useRef(route.page)
+  useEffect(() => {
+    const changed = prevRoutePage.current !== route.page
+    prevRoutePage.current = route.page
+    if (changed && state && qualityConsumingRoute) quality.refresh()
+  }, [route.page, Boolean(state), qualityConsumingRoute, quality.refresh])
+  const usesQuality = Boolean(state?.draft.groups.some(g => g.qualityDeviceId && g.members.some(m => m.kind === 'pool' && hasQualityConditions(m.quality))))
+  const viewQuality = usesQuality ? quality.latest : null
+  const view = useMemo(() => state ? projection(state.draft, state, viewQuality) : null, [state?.draft, datasetVersions, viewQuality])
   if (!session) return <Loading error={sessionError} retry={loadSession}>正在连接服务端…</Loading>
   if (!session.authenticated) return <SignIn session={session} onDone={next => { setSessionError(''); setSession(next) }} />
   if (!state || !view) return <Loading error={sessionError} retry={() => {
@@ -435,7 +558,7 @@ function App() {
     </SidebarProvider>
     {help && <Modal title="键盘快捷键" onClose={() => setHelp(false)}>
       <dl className="shortcut-list">
-        {pages.map(([, name], i) => <div className="key-row" key={name}><dt>{name}</dt><dd><kbd>Alt + {i + 1}</kbd></dd></div>)}
+        {pages.slice(0, 10).map(([, name], i) => <div className="key-row" key={name}><dt>{name}</dt><dd><kbd>Alt + {i < 9 ? i + 1 : 0}</kbd></dd></div>)}
       </dl>
     </Modal>}
   </ProjectContext.Provider>

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowUpDown, Check, ChevronDown, Copy, Ellipsis, Layers3, Pencil, Plus, RotateCcw, Trash2, X } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { builtins, groupTypes, regionalAutoGroups, regionLabel, standardGroups } from '../shared/catalog.ts'
-import { compilePoolFilter, membersForSources, memberSourceIds, poolCondition } from '../shared/group-filter.ts'
+import { compilePoolFilter, hasQualityConditions, membersForSources, memberSourceIds, poolCondition } from '../shared/group-filter.ts'
 import { GroupFilter } from './group-filter.tsx'
 import { groupReferences, nodeKey } from '../shared/config.ts'
 import { useConfirm, useUnsavedChanges } from './confirm.tsx'
@@ -34,7 +34,7 @@ function memberName(member: GroupMember, draft: Draft, nodeNames: Map<string, st
     member.regions.length ? member.regions.map(regionLabel).join('、') : '全部地区',
     member.includeRegex && '包含 /' + member.includeRegex + '/',
     member.excludeRegex && '排除 /' + member.excludeRegex + '/',
-    member.quality && '按质量报告筛选', member.search && '搜索「' + member.search + '」',
+    hasQualityConditions(member.quality) ? '含质量筛选' : member.quality?.topN ? '前 ' + member.quality.topN + ' 个' : member.quality && '含筛选策略', member.search && '搜索「' + member.search + '」',
     member.nodeKeys && '限定 ' + member.nodeKeys.length + ' 个节点',
   ].filter(Boolean).join(' · ')
 }
@@ -48,7 +48,7 @@ function memberSummary(members: ProjectedMember[]) {
     .map(([kind, count]) => formatNumber(count) + ' 个' + memberType[kind as keyof typeof memberType]).join(' · ') || '0 项'
 }
 
-function GroupEditor({ group, onClose, inline, onCopy, onRemove, onDirtyChange }: { onCopy?: () => void; onRemove?: () => void; onDirtyChange?: (dirty: boolean) => void } & ({ inline: true; group: Group; onClose?: never } | { inline?: false; group?: Group; onClose: (id?: string) => void })) {
+function GroupEditor({ group, onClose, inline, onCopy, onRemove, onDirtyChange, actionsBusy = false }: { onCopy?: () => void; onRemove?: () => void; onDirtyChange?: (dirty: boolean) => void; actionsBusy?: boolean } & ({ inline: true; group: Group; onClose?: never } | { inline?: false; group?: Group; onClose: (id?: string) => void })) {
   const { state, view, save } = useProject()
   const [original, setOriginal] = useState(() => group ?? newGroup())
   const [revision, setRevision] = useState(state.revision)
@@ -89,10 +89,10 @@ function GroupEditor({ group, onClose, inline, onCopy, onRemove, onDirtyChange }
     groups: group ? state.draft.groups.map(item => item.id === group.id ? form : item) : [...state.draft.groups, form],
   }), [form, group?.id, state.draft])
   const { quality } = useProject()
-  const computed = useMemo(() => projection(draft, state, quality.snapshot), [draft, state, quality.snapshot])
+  const computed = useMemo(() => projection(draft, state, quality.latest), [draft, state, quality.latest])
   const members = computed.groups.find(item => item.id === form.id)?.members ?? []
   const nodeNames = useMemo(() => new Map(view.nodes.map(node => [node.key, node.name])), [view.nodes])
-  const awaitingQuality = !quality.ready && form.members.some(m => m.kind === 'pool' && m.quality)
+  const awaitingQuality = !quality.ready && form.members.some(m => m.kind === 'pool' && hasQualityConditions(m.quality))
   const issues = computed.issues.filter(issue => issue.pane === 'groups' && issue.id === form.id && !(awaitingQuality && ['group-empty', 'pool-quality-empty'].includes(issue.code)))
   const matched = view.nodes.filter(node => node.kept && (!nodeSource || node.sourceId === nodeSource) && (searchable(node.name, query) || searchable(node.sourceName, query) || searchable(regionLabel(node.region), query)))
   const [offset, setOffset] = usePage(matched.length, 20)
@@ -136,6 +136,7 @@ function GroupEditor({ group, onClose, inline, onCopy, onRemove, onDirtyChange }
     else setMembers(form.members.filter(member => !(member.kind === 'node' && member.sourceId === node.sourceId && member.id === node.id)))
   }
   async function commit() {
+    if (busy || actionsBusy) return
     setProblem('')
     if (!form.name.trim()) { setNameError('请填写组名。'); groupName.current?.focus(); return }
     const invalid = issues.find(issue => ['group-structure', 'group-filter'].includes(issue.code))
@@ -157,7 +158,7 @@ function GroupEditor({ group, onClose, inline, onCopy, onRemove, onDirtyChange }
   function replaceMember(index: number, member: GroupMember) {
     setMembers(form.members.map((entry, i) => i === index ? member : entry))
   }
-  const content = <div className="stack group-fields" inert={busy}>
+  const content = <div className="stack group-fields" inert={busy || actionsBusy}>
       {problem && <Alert tone="danger">{problem}</Alert>}
       <FieldGroup className="form-grid"><Field label="代理组名称" name="group_name" error={nameError}><Input ref={groupName} value={form.name} maxLength={256} onChange={event => {
         update('name', event.target.value)
@@ -172,7 +173,7 @@ function GroupEditor({ group, onClose, inline, onCopy, onRemove, onDirtyChange }
         <div className="stack tight">
           <Segmented label="添加方式" items={ [['pool', '动态筛选'], ['node', '指定节点'], ['group', '代理组与内置策略']] } value={picker} onChange={setPicker} />
           {picker === 'pool' && <GroupFilter member={pool} index={poolIndex} sources={state.draft.sources} nodes={view.nodes}
-            headingRef={filterHeading} onNew={() => editFilter(-1)} onChange={updateFilter} />}
+            deviceId={form.qualityDeviceId} onDeviceChange={id => update('qualityDeviceId', id)} headingRef={filterHeading} onNew={() => editFilter(-1)} onChange={updateFilter} />}
           {picker === 'node' && <>
             <div className="filters"><SearchBox value={query} placeholder="搜索保留节点" onChange={value => { setQuery(value); setOffset(0) }} />
               <NativeSelect aria-label="节点来源" value={nodeSource} onChange={event => { setNodeSource(event.target.value); setOffset(0) }}><NativeSelectOption value="">全部订阅源</NativeSelectOption>
@@ -254,13 +255,13 @@ function GroupEditor({ group, onClose, inline, onCopy, onRemove, onDirtyChange }
         <Toggle label="禁用此组的 UDP 转发" checked={form.disableUdp} onChange={value => update('disableUdp', value)} />
       </FieldGroup></Disclosure>
     </div>
-  const saveAction = <Button variant="primary" size={inline ? 'small' : 'default'} icon={Check} disabled={(inline && !dirty) || issues.some(issue => issue.code === 'group-filter')} busy={busy} onClick={commit}>保存代理组</Button>
+  const saveAction = <Button variant="primary" size={inline ? 'small' : 'default'} icon={Check} disabled={(inline && !dirty) || actionsBusy || issues.some(issue => issue.code === 'group-filter')} busy={busy} onClick={commit}>保存代理组</Button>
   if (inline) return <Panel className="group-detail" title={<>{group.name} <code className="tech-chip">{form.type}</code> <Badge tone="success">{formatNumber(members.length)} 项代理</Badge></>}
     actions={<>
-      {dirty ? <><Button size="small" onClick={() => { setForm(structuredClone(original)); setPoolIndex(firstPool(original.members)); setProblem(''); setNameError('') }}>撤销更改</Button>{saveAction}</>
-        : <><Button size="small" icon={Copy} onClick={onCopy}>复制</Button><IconButton icon={Trash2} className="delete-action" label={'删除代理组 ' + group.name} onClick={onRemove} /></>}
+      {dirty ? <><Button size="small" disabled={busy || actionsBusy} onClick={() => { if (busy || actionsBusy) return; setForm(structuredClone(original)); setPoolIndex(firstPool(original.members)); setProblem(''); setNameError('') }}>撤销更改</Button>{saveAction}</>
+        : <><Button size="small" icon={Copy} busy={actionsBusy} disabled={actionsBusy || busy} onClick={onCopy}>复制</Button><IconButton icon={Trash2} className="delete-action" label={'删除代理组 ' + group.name} disabled={actionsBusy || busy} onClick={onRemove} /></>}
     </>}>{content}</Panel>
-  return <Modal wide title="新建代理组" onClose={close} footer={<><Button variant="ghost" onClick={close}>取消</Button>{saveAction}</>}>{content}</Modal>
+  return <Modal wide title="新建代理组" onClose={close} footer={<><Button variant="ghost" disabled={busy} onClick={close}>取消</Button>{saveAction}</>}>{content}</Modal>
 }
 
 function cloneGroups(input: TemplateGroup[], draft: Draft): Group[] {
@@ -334,15 +335,15 @@ export function GroupsPage() {
   }
   const candidateGroups = groups.filter(group => !obsolete.has(group.id))
   async function run(action: () => unknown) {
+    if (busy) return
     setBusy(true)
     try { await action() } catch (cause) { const error = asError(cause); notify(error.message, 'danger') } finally { setBusy(false) }
   }
-  const updateGroups = (next: Group[]) => save({ ...state.draft, groups: next })
+  const updateGroups = (next: Group[], message?: string) => save({ ...state.draft, groups: next }, state.revision, message)
   const move = (from: number, to: number) => run(() => updateGroups(moveAt(groups, from, to)))
   const importTemplate = (entries: TemplateGroup[]) => run(async () => {
-    await updateGroups([...groups, ...cloneGroups(entries, state.draft)])
+    await updateGroups([...groups, ...cloneGroups(entries, state.draft)], '已添加 ' + entries.length + ' 个代理组')
     setTemplateMenu(null)
-    notify('已添加 ' + entries.length + ' 个代理组')
   })
   function commitDelete() {
     if (!remove) return
@@ -363,7 +364,7 @@ export function GroupsPage() {
     <h1 className="sr-only" tabIndex={-1}>代理组</h1>
     <Panel title="代理组编排" count={formatNumber(groups.length)} actions={<>
       <Button size="small" icon={Layers3} disabled={editingDirty || busy} onClick={() => setTemplateMenu('library')}>组模板</Button>
-      <Button icon={Plus} size="small" variant="primary" onClick={() => navigate('groups', 'new')}>新建代理组</Button>
+      <Button icon={Plus} size="small" variant="primary" disabled={busy} onClick={() => navigate('groups', 'new')}>新建代理组</Button>
     </>}>
       <div className="config-toolbar"><div className="template-strip"><Layers3 aria-hidden="true" /><span>常用组模板</span>
         <Button size="small" icon={Plus} disabled={editingDirty || busy} onClick={() => importTemplate(standardGroups)}>手动选择 + 自动选择</Button>
@@ -393,38 +394,42 @@ export function GroupsPage() {
             </li>
           })}</ul>{visible.length > 30 && <Pager offset={offset} pageSize={30} count={visible.length} onChange={setOffset} />}</>}
       </Panel>
-      {selected && route.id !== 'new' ? <GroupEditor key={selected.id} inline group={selected} onDirtyChange={setEditingDirty}
+      {selected && route.id !== 'new' ? <GroupEditor key={selected.id} inline group={selected} actionsBusy={busy} onDirtyChange={setEditingDirty}
         onCopy={() => run(() => updateGroups([...groups, ...cloneGroups([selected], state.draft)]))}
         onRemove={() => { setReplacement(''); setRemove(selected) }} />
         : <Panel title="组内代理"><Empty icon={Layers3} title={groups.length ? '正在创建代理组' : '创建第一个代理组'} detail={!groups.length && '可以按来源、地区和正则筛选节点，也可以点选节点或引用其他代理组。'} /></Panel>}
     </div>
     {route.id === 'new' && <GroupEditor key="new" onClose={id => navigate('groups', id)} />}
-    {remove && <Modal title={'删除代理组 · ' + remove.name} detail="下次发布时，订阅将移除这个代理组。" onClose={() => setRemove(null)}
-      footer={<><Button onClick={() => setRemove(null)}>取消</Button><Button variant="danger" busy={busy} disabled={removingRefs.length > 0 && !replacement} onClick={commitDelete}>{removingRefs.length ? '迁移并删除' : '确认删除'}</Button></>}>
-      {removingRefs.length ? <div className="stack">
+    {remove && <Modal title={'删除代理组 · ' + remove.name} detail="下次发布时，订阅将移除这个代理组。" onClose={() => !busy && setRemove(null)}
+      footer={<><Button disabled={busy} onClick={() => setRemove(null)}>取消</Button><Button variant="danger" busy={busy} disabled={removingRefs.length > 0 && !replacement} onClick={commitDelete}>{removingRefs.length ? '迁移并删除' : '确认删除'}</Button></>}>
+      {removingRefs.length ? <div className="stack" inert={busy}>
         <Alert tone="warning">此组仍有 {removingRefs.length} 处引用。可打开相关项目单独调整，或选择替代策略后批量迁移。</Alert>
         <ul className="compact-list">{removingRefs.map(ref => <li key={ref.id}><RouteLink className="text-link" page={ref.pane} id={ref.id} onClick={() => setRemove(null)}>{ref.name}（{ref.pane === 'groups' ? '代理组' : '路由规则'}）</RouteLink></li>)}</ul>
         <Field label="替代策略"><OutletSelect label="替代策略" groups={candidateGroups} value={replacement} onChange={setReplacement} /></Field>
       </div> : <p>此代理组没有其他规则或分组引用。</p>}
     </Modal>}
-    {templateMenu === 'library' && <Modal title="代理组模板" detail="导入后可自由编辑、停用及删除。跨方案套用时，仅保留可用的来源与组引用。" onClose={() => setTemplateMenu(null)}>
+    {templateMenu === 'library' && <Modal title="代理组模板" detail="导入后可自由编辑、停用及删除。跨方案套用时，仅保留可用的来源与组引用。" onClose={() => !busy && setTemplateMenu(null)}>
       <div className="stack">
         <div className="list-option"><div><strong>常用代理组</strong><p>手动选择、自动选择</p></div><Button size="small" onClick={() => importTemplate(standardGroups)} busy={busy}>导入</Button></div>
         <RegionalGroupPicker nodes={view.nodes} busy={busy} onImport={importTemplate} />
         {state.library.groups.map(template => <div className="list-option" key={template.id}><div><strong>{template.name}</strong><p>{template.groups.length} 个代理组</p></div>
           <div className="actions"><Button size="small" onClick={() => importTemplate(template.groups)} disabled={busy}>导入</Button>
-            <IconButton icon={Trash2} label={'删除模板 ' + template.name} onClick={async () => {
+            <IconButton icon={Trash2} label={'删除模板 ' + template.name} disabled={busy} onClick={async () => {
+              if (busy) return
               if (!await confirm({ title: '删除组模板？', detail: '已导入的代理组仍可使用。此模板将从模板列表移除。', action: '删除模板', danger: true })) return
+              if (busy) return
               await run(async () => {
-                applyState(await call('library', { ...state.library, groups: state.library.groups.filter(item => item.id !== template.id) }))
-                notify('模板已删除')
+                if (applyState(await call('library', { ...state.library, groups: state.library.groups.filter(item => item.id !== template.id) }))) {
+                  notify('模板已删除')
+                }
               })
             }} /></div></div>)}
-        <div className="actions input-actions"><Input aria-label="组模板名称" placeholder="将当前代理组保存为模板" value={name} onChange={event => setName(event.target.value)} />
+        <div className="actions input-actions"><Input aria-label="组模板名称" placeholder="将当前代理组保存为模板" disabled={busy} value={name} onChange={event => setName(event.target.value)} />
           <Button icon={Plus} disabled={!name.trim() || !groups.length} busy={busy} onClick={() => run(async () => {
-            applyState(await call('library', { ...state.library, groups: [...state.library.groups, { id: newId(), name: name.trim(), groups }] }))
-            setName('')
-            notify('组模板已保存')
+            if (applyState(await call('library', { ...state.library, groups: [...state.library.groups, { id: newId(), name: name.trim(), groups }] }))) {
+              setName('')
+              notify('组模板已保存')
+            }
           })}>保存模板</Button></div>
       </div>
     </Modal>}

@@ -56,7 +56,7 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     let jobId = ''
     const secret = randomBytes(32).toString('base64url')
     const worker = randomBytes(32).toString('base64url')
-    const capabilities = { agentVersion: '1.3.0', mihomoVersion: 'v1.19', protocolVersion: 2, ipStack: 'dual', localRegion: 'JP', localIsp: 'Test ISP' }
+    const capabilities = { agentVersion: '1.3.1', mihomoVersion: 'v1.19', protocolVersion: 3, ipStack: 'dual', localRegion: 'JP', localIsp: 'Test ISP' }
     const post = (action: string, bearer: string, body: object) => page.request.post(base + '/api/quality/agent/' + action, {
       headers: { Authorization: 'Bearer ' + bearer }, data: { profileId, jobId, ...(['enroll', 'poll'].includes(action) && { capabilities }), ...body },
     })
@@ -65,7 +65,8 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     await expect(dialog.getByRole('radio', { name: 'Desk PC' })).toBeChecked({ timeout: 15000 })
     const secondInvite = await (await page.request.post(base + '/api/quality/invite', { data: {} })).json() as DevicePairing
     const secondSecret = randomBytes(32).toString('base64url')
-    expect((await post('enroll', secondInvite.pairing.split('.').at(-1)!, { name: 'Lab PC', platform: 'linux', secret: secondSecret })).ok()).toBe(true)
+    expect((await post('enroll', secondInvite.pairing.split('.').at(-1)!, { name: 'Lab PC', platform: 'linux', secret: secondSecret,
+      capabilities: { ...capabilities, agentVersion: '1.3.0', protocolVersion: 2 } })).ok()).toBe(true)
     const second = (await (await page.request.get(base + '/api/quality/devices')).json()).find((d: { name: string }) => d.name === 'Lab PC')
     await dialog.getByRole('radio', { name: 'Desk PC' }).check()
     await dialog.locator('.workspace-dialog-body').evaluate(el => { el.scrollTop = 0 })
@@ -92,7 +93,10 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     await dialog.getByRole('button', { name: '关闭', exact: true }).click()
     await page.getByRole('button', { name: '质量检测', exact: true }).click()
     await expect(dialog.getByRole('progressbar')).toHaveAttribute('value', '121')
-    const ai = Object.fromEntries(surfaces.map(s => [s, classify(s, null)])) as NonNullable<QualityRow['ai']>
+    const ai = Object.fromEntries(surfaces.map(s => [s, classify(s, null, null, 'JP')])) as NonNullable<QualityRow['ai']>
+    ai.chatgptApp = classify('chatgptApp', { status: 403, body: '{"cf_details":"Request is not allowed. Please try again later."}', location: '', challenge: false }, null, 'JP')
+    ai.claudeApi = classify('claudeApi', { status: 401, body: '{"error":"authentication_error"}', location: '', challenge: false }, null, 'JP')
+    ai.claudeWeb = classify('claudeWeb', { status: 403, body: '', location: '', challenge: true }, null, 'JP')
     ai.grok = classify('grok', { status: 403, body: '', location: '', challenge: true })
     const results: QualityRow[] = job.nodes.map(({ key }, i) => {
       const slow = i === job.nodes.length - 1
@@ -100,13 +104,13 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
       return { key, available: true, error: null,
         samples: Array.from({ length: job.config.rounds }, () => ({ tlsMs: 25, httpsMs })),
         tlsMedianMs: 25, httpsMedianMs: httpsMs, jitterMs: 0, lossRate: 0,
-        exit: { ip: slow ? '192.0.2.11' : '192.0.2.10', region: 'JP' }, ai: slow ? null : ai, aiSkipped: slow ? 'weak_connection' : undefined,
+        exit: i === 0 ? null : { ip: slow ? '192.0.2.11' : '192.0.2.10', region: 'JP' }, ai: slow ? null : ai, aiSkipped: slow ? 'weak_connection' : undefined,
         speed: { bytes: 1048576, elapsedMs: 1000, averageBps: 1048576, peakBps: 1048576, perSecondBps: [1048576], stop: 'end' },
       }
     })
     expect((await post('complete', worker, { report: { schemaVersion: 1, jobId, startedAt: job.createdAt, finishedAt: new Date().toISOString(), results } })).ok()).toBe(true)
     await expect(dialog.getByRole('heading', { name: '检测结果' })).toBeVisible()
-    await expect(dialog.getByText(/AI 已测 1 \/ 2 个/)).toContainText('需复核 1 个（占全部出口 50.0%，占已测出口 100.0%）')
+    await expect(dialog.getByText(/有 AI 结果的节点 204 个/)).toContainText('出口 IP 覆盖 1 / 2 个 · 需复核 1 个（占全部出口 50.0%，占已测出口 100.0%）')
     await dialog.getByLabel('对比 AI 平台').selectOption('grok')
     await capture('results-mobile')
     await page.setViewportSize({ width: 1440, height: 940 })
@@ -123,6 +127,10 @@ test('selects across pages, pairs the PC probe, follows progress, inspects evide
     expect(await dialog.locator('.workspace-dialog-body').evaluate(el => el.scrollTop)).toBeCloseTo(scrollBefore, 0)
     await dialog.getByPlaceholder('搜索节点、出口 IP 或地区').fill('东京 001')
     await dialog.getByRole('button', { name: '查看检测详情 东京 001' }).click()
+    await expect(dialog.getByText('测试订阅 · 推定 JP')).toBeVisible()
+    await expect(dialog.getByRole('heading', { name: 'Claude · 部分入口可达（2 分）' })).toBeVisible()
+    await expect(dialog.getByText(/应用网关已响应 · HTTP 403/)).toBeVisible()
+    await expect(dialog.getByRole('heading', { name: /Gemini Web/ })).toBeVisible()
     await expect(dialog.getByText('Cloudflare 挑战', { exact: true })).toBeVisible()
     await expect(dialog.getByText('TLS 握手中位数', { exact: true })).toBeVisible()
     await capture('detail-desktop')

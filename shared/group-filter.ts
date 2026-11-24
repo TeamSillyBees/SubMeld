@@ -1,5 +1,5 @@
 import type { FilteredNode, GroupMember, Pool } from './model.ts'
-import { compareQuality, qualityValue, type NodeQuality, type QualitySnapshot } from './quality-snapshot.ts'
+import { compareQuality, platformSurfaces, qualityValue, type NodeQuality, type QualitySnapshot } from './quality-snapshot.ts'
 import { isSubscriptionNotice } from './quality-options.ts'
 import { RE2JS } from 're2js'
 
@@ -61,7 +61,7 @@ export const qualityPresets: Record<string, { name: string; condition: QualityCo
   alive: { name: '可用节点', condition: { alive: true } },
   lowLatency: { name: '低延迟', condition: { alive: true, maxLatencyMs: 250, maxLossRate: 0.1 } },
   streaming: { name: '流畅视频', condition: { alive: true, minBandwidthMbps: 20, maxLossRate: 0.05 } },
-  ai: { name: 'AI 网页', condition: { platforms: ['chatgptWeb', 'gemini', 'claudeWeb', 'grok'] } },
+  ai: { name: 'AI 网页', condition: { alive: true, maxLossRate: 0.3, platforms: ['chatgptWeb', 'gemini', 'claudeWeb', 'grok'] } },
 }
 export function skippedMetrics(q: QualityCondition, config?: QualitySnapshot['config']) {
   return {
@@ -84,6 +84,7 @@ export function qualityReason(q: QualityCondition, r?: NodeQuality, config?: Qua
   if (surfaces?.length && r.reachable && surfaces.some(s => !r.reachable!.includes(s) && !(allowChallenge && r.surfaceIssues?.[s] === 'degraded_challenge'))) return 'platform'
   const levels = platforms?.map(p => qualityValue(r, p)) ?? []
   if (levels.some(level => level !== null && level < (q.minUnlockLevel ?? 2))) return 'platform'
+  if (platforms?.some(p => platformSurfaces[p].some(s => r.surfaceIssues?.[s] === 'region_restricted'))) return 'platform'
   if (q.maxLatencyMs != null && r.httpsMs == null || q.maxLossRate != null && r.lossRate == null ||
       q.maxJitterMs != null && r.jitterMs == null || bandwidth != null && r.speedMbps == null ||
       q.exitRegions?.length && !r.exitRegion || surfaces?.length && !r.reachable || levels.includes(null)) return 'untested'
@@ -123,14 +124,23 @@ export function resolvePool<T extends Pick<FilteredNode, 'key' | 'kept' | 'sourc
   }) : candidates
   const emptied = Boolean(quality && candidates.length && !passed.length)
   let selected = passed
+  let relaxation: 'latency' | 'challenge' | null = null
   if (emptied && quality?.relaxWhenEmpty) {
-    const relaxed = { ...quality, maxLatencyMs: undefined, minUnlockLevel: 1 as const }
-    selected = candidates.filter(node => {
-      const reason = qualityReason(relaxed, snapshot?.rows[node.key], snapshot?.config, true)
+    const withoutLatency = { ...quality, maxLatencyMs: undefined }
+    const match = (condition: QualityCondition, allowChallenge: boolean) => candidates.filter(node => {
+      const reason = qualityReason(condition, snapshot?.rows[node.key], snapshot?.config, allowChallenge)
       return !reason || reason === 'untested' && quality.untestedPolicy === 'include'
     })
+    if (quality.maxLatencyMs != null) {
+      selected = match(withoutLatency, false)
+      if (selected.length) relaxation = 'latency'
+    }
+    if (!selected.length && (quality.platforms?.length || quality.aiPlatforms?.length)) {
+      selected = match({ ...withoutLatency, minUnlockLevel: 1 }, true)
+      if (selected.length) relaxation = 'challenge'
+    }
   }
-  const relaxed = emptied && !!selected.length
+  const relaxed = relaxation !== null
   const fallback = emptied && !relaxed && !!quality?.fallbackWhenEmpty
   if (fallback) selected = candidates
   if (quality?.sortBy) {
@@ -142,7 +152,7 @@ export function resolvePool<T extends Pick<FilteredNode, 'key' | 'kept' | 'sourc
   for (const node of selected.slice(matches.length)) removed.push({ node, reason: 'limit', stage: 'limit' })
   const stageCounts = { source: sourceNodes.length, name: candidates.length,
     performance: candidates.length - removed.filter(r => r.stage === 'performance').length, regionAi: passed.length, limit: matches.length }
-  return { ...filter, matches, sourceNodes, candidates, passed, reasons, removed, untested, emptied, fallback, relaxed, stageCounts }
+  return { ...filter, matches, sourceNodes, candidates, passed, reasons, removed, untested, emptied, fallback, relaxed, relaxation, stageCounts }
 }
 
 // An explicitly scoped pool loses missing sources. Losing its last source

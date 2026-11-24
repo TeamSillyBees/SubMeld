@@ -33,4 +33,6 @@ export const unlistedRegions = {
   ChatGPT: new Set('AI AQ AS BQ BV BY CC CK CN CU CW CX EH FK GG GI GS GU HK HM IM IO IR JE KP MO MP MS NF NU PN PR RU SX SY TC TK UM VE VG VI XK'.split(' ')),
   Claude: new Set('AF BY CN CU EH HK IR KP MM MO RU SY VE XK YE'.split(' ')),
   Gemini: new Set('AF BV BY CN CU IR KP RU SY'.split(' ')),
+  // Audit hints for denied Grok Web requests. A product page or an explicit origin response takes precedence.
+  Grok: new Set('AF BY CN CU IR KP MO RU SY VE'.split(' ')),
 }

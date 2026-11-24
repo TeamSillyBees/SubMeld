@@ -5,6 +5,7 @@ import { isIP, type Socket } from 'node:net'
 import { once } from 'node:events'
 import type { LatencySample, QualityConfig, QualityRow, SpeedReading } from '../shared/quality.ts'
 import type { Outlet } from './core.ts'
+import { countryCode } from './regions.ts'
 
 export interface Targets { latency: string; exit: string; exitFallback?: string; download: string }
 export const targets: Targets = {
@@ -50,16 +51,20 @@ async function viaOutlet<T>(outlet: Outlet, target: string, signal: AbortSignal,
 async function sample(outlet: Outlet, signal: AbortSignal, target: string): Promise<LatencySample> {
   const start = performance.now()
   let tlsMs: number | null = null
+  let httpStatus: number | undefined
   const budget = new AbortController()
   let deadline = setTimeout(() => budget.abort(), 6000)
   try {
     const httpsMs = await viaOutlet(outlet, target, AbortSignal.any([signal, budget.signal]),
-      res => res.statusCode === 204 ? round(performance.now() - start) : null, value => {
+      res => {
+        httpStatus = res.statusCode
+        return httpStatus === 204 ? round(performance.now() - start) : null
+      }, value => {
         tlsMs = value
         clearTimeout(deadline)
         deadline = setTimeout(() => budget.abort(), 3000)
       })
-    return { tlsMs, httpsMs }
+    return { tlsMs, httpsMs, httpStatus }
   } catch { signal.throwIfAborted(); return { tlsMs, httpsMs: null } }
   finally { clearTimeout(deadline) }
 }
@@ -78,26 +83,31 @@ export function summarize(samples: LatencySample[]) {
     lossRate: samples.length ? (samples.length - https.length) / samples.length : null,
   }
 }
-async function readExit(outlet: Outlet, signal: AbortSignal, target: string): Promise<QualityRow['exit']> {
-  try {
-    return await viaOutlet(outlet, target, AbortSignal.any([signal, AbortSignal.timeout(6000)]), async res => {
-      if (res.statusCode !== 200) return null
-      const parts: Buffer[] = []
-      let size = 0
-      for await (const chunk of res) {
-        size += chunk.length
-        if (size > 16_384) return null
-        parts.push(chunk)
-      }
-      const trace = Buffer.concat(parts).toString()
-      const data = trace.trimStart().startsWith('{') ? JSON.parse(trace) : null
-      const ip = data?.ip ?? /^ip=(\S+)\s*$/m.exec(trace)?.[1]
-      const code = data?.country ?? /^loc=([A-Z]{2})\s*$/m.exec(trace)?.[1]
-      const region = typeof code === 'string' && /^[A-Z]{2}$/.test(code) ? code : null
-      if (!ip || !isIP(ip)) return null
-      return { ip: isIP(ip) === 6 ? new URL('http://[' + ip + ']').hostname.slice(1, -1) : ip, region }
-    })
-  } catch { signal.throwIfAborted(); return null }
+async function exitFromResponse(res: IncomingMessage): Promise<QualityRow['exit']> {
+  if (res.statusCode === 408 || (res.statusCode ?? 0) >= 500) throw new Error('出口查询暂时失败。')
+  if (res.statusCode !== 200) return null
+  const parts: Buffer[] = []
+  let size = 0
+  for await (const chunk of res) {
+    size += chunk.length
+    if (size > 16_384) return null
+    parts.push(chunk)
+  }
+  const trace = Buffer.concat(parts).toString()
+  const data = trace.trimStart().startsWith('{') ? JSON.parse(trace) : null
+  const ip = data?.ip ?? /^ip=(\S+)\s*$/m.exec(trace)?.[1]
+  const code = data?.country ?? /^loc=([A-Z]{2})\s*$/m.exec(trace)?.[1]
+  const region = countryCode(code)
+  if (typeof ip !== 'string' || !isIP(ip)) throw new Error('出口查询未返回有效 IP。')
+  return { ip: isIP(ip) === 6 ? new URL('http://[' + ip + ']').hostname.slice(1, -1) : ip, region }
+}
+async function readExit(outlet: Outlet, signal: AbortSignal, target: string, budgets: number[]) {
+  for (const budget of budgets) {
+    signal.throwIfAborted()
+    try { return await viaOutlet(outlet, target, AbortSignal.any([signal, AbortSignal.timeout(budget)]), exitFromResponse) }
+    catch { signal.throwIfAborted() }
+  }
+  return null
 }
 
 export async function measureLatency(key: string, outlet: Outlet, config: QualityConfig, signal: AbortSignal, endpoints = targets): Promise<QualityRow> {
@@ -105,9 +115,11 @@ export async function measureLatency(key: string, outlet: Outlet, config: Qualit
   const samples: LatencySample[] = []
   for (let i = 0; i < config.rounds; i++) samples.push(await sample(outlet, signal, endpoints.latency))
   const metrics = summarize(samples)
-  let exit = metrics.available ? await readExit(outlet, signal, endpoints.exit) : null
-  if (metrics.available && !exit && endpoints.exitFallback) exit = await readExit(outlet, signal, endpoints.exitFallback)
-  return { key, samples, ...metrics, error: metrics.available ? null : 'no_response',
+  let exit = metrics.available ? await readExit(outlet, signal, endpoints.exit, [5000, 3000]) : null
+  if (metrics.available && !exit && endpoints.exitFallback) exit = await readExit(outlet, signal, endpoints.exitFallback, [6000])
+  const error = samples.some(s => s.httpStatus != null) ? 'unexpected_status'
+    : metrics.tlsMedianMs != null ? 'https_no_response' : 'no_response'
+  return { key, samples, ...metrics, error: metrics.available ? null : error,
     exit, speed: null, ai: null }
 }
 

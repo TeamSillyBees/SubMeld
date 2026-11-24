@@ -8,12 +8,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Impit } from 'impit'
-import { classify, googleRegion, inspectPlatforms, verifyGemini } from '../agent/ai.ts'
+import { applyExitRegionFallback, classify, googleRegion, inspectPlatforms, verifyGemini } from '../agent/ai.ts'
 import { parseInvite } from '../agent/device.ts'
 import { summarize } from '../agent/measure.ts'
 import { createQualityService, qualitySpaces } from '../server/quality.ts'
 import { openStore } from '../server/store.ts'
-import { qualityDefaults, type Assignment, type QualityRow } from '../shared/quality.ts'
+import { qualityDefaults, surfaces, type AiResults, type Assignment, type QualityRow } from '../shared/quality.ts'
 import type { Profile } from '../shared/model.ts'
 import { minimumProbeVersion, probeProtocol, probeQueueLimit } from '../shared/quality-options.ts'
 
@@ -241,6 +241,9 @@ test('public platform evidence distinguishes challenge, region, IP ban, login an
   assert.equal(classify('grok', page(403, '', '', true)).state, 'challenge')
   assert.equal(classify('grok', page(403, 'Not available in your country')).state, 'region_restricted')
   assert.equal(classify('grok', page(429)).state, 'rate_limited')
+  assert.equal(classify('grok', page(403, '', '', true), null, 'RU').evidence, 'region_policy')
+  assert.equal(classify('grok', page(403, '', '', true), null, 'HK').state, 'degraded_challenge')
+  assert.equal(classify('grok', page(200, '<title>Grok</title>'), null, 'RU').state, 'reachable')
   assert.equal(classify('chatgptWeb', page(200, '{"cookie_consent_required":false,"country_code":"jp"}')).providerRegion, 'JP')
   assert.equal(classify('chatgptWeb', page(403, '{"error":"unsupported_country","country":"HK"}'), null, 'JP').providerRegion, 'HK')
   assert.equal(classify('chatgptWeb', page(200, '{"cookie_consent_required":false}')).state, 'reachable')
@@ -250,13 +253,30 @@ test('public platform evidence distinguishes challenge, region, IP ban, login an
   for (const body of ['{"cf_details":"exit (1)"}', '{"cf_details":{"reason":"(2)"}}', '{"cf_details":"Disallowed ISP"}', '{"blocked_why_headline":"ISP"}']) {
     assert.equal(classify('chatgptApp', page(200, body)).state, 'unavailable')
   }
+  const gateway = { cf_details: 'Request is not allowed. Please try again later.' }
+  for (const status of [200, 403]) {
+    assert.equal(classify('chatgptApp', page(status, JSON.stringify(gateway)), 'HK', 'JP').evidence, 'app_gateway')
+    for (const message of ['blocked (1)', 'ISP (2)', 'disallowed ISP', 'VPN', 'proxy']) {
+      assert.equal(classify('chatgptApp', page(status, JSON.stringify({ ...gateway, error: { message } }))).evidence, 'disallowed_isp')
+    }
+  }
+  assert.equal(classify('chatgptApp', page(403, JSON.stringify(gateway)), 'JP', 'HK').state, 'region_restricted')
+  assert.equal(classify('chatgptApp', page(403, JSON.stringify(gateway), '', true)).state, 'challenge')
+  assert.equal(classify('chatgptApp', page(403, JSON.stringify({ ...gateway, error: 'unsupported_country' }))).evidence, 'region_denied')
+  assert.equal(classify('chatgptApp', page(403, '{"cf_details":"another gateway error"}')).needsReview, true)
+  for (const body of ['Forbidden', 'null', '{}', '{"cf_details":42}', JSON.stringify({ ...gateway, error: { message: 'denied' } })]) {
+    assert.equal(classify('chatgptApp', page(403, body)).state, 'unavailable')
+  }
+  assert.equal(classify('chatgptApp', page(503, JSON.stringify(gateway))).state, 'unavailable')
   assert.equal(classify('chatgptApp', page(200, '{"cf_details":"","error":"bad response"}')).state, 'unknown')
   for (const message of ['VPN required', '{"vpn_detected":true}', 'something went wrong', 'unable to load site']) assert.equal(classify('chatgptApp', page(200, message)).state, 'unavailable')
   assert.equal(classify('claudeApi', null).needsReview, false)
   assert.equal(classify('gemini', page(403, '', '', true), 'JP').state, 'challenge')
   assert.equal(classify('gemini', page(403), 'HK').state, 'unavailable')
   assert.equal(classify('gemini', page(403), 'RU').state, 'unavailable')
-  assert.equal(classify('gemini', page(302, '', 'https://www.google.com/sorry/index')).state, 'degraded_challenge')
+  assert.equal(classify('gemini', page(302, '', 'https://www.google.com/sorry/index')).evidence, 'bot_challenge')
+  assert.equal(classify('gemini', page(302, '', 'https://consent.google.com/m')).evidence, 'consent_redirect')
+  assert.equal(classify('gemini', page(302, '', 'https://google.com.invalid/sorry/index')).state, 'unknown')
   assert.equal(classify('gemini', page(302, '', '/unsupported')).state, 'region_restricted')
   assert.equal(classify('gemini', page(200, '<title>gemini</title>')).evidence, 'region_unconfirmed')
   assert.equal(classify('claudeWeb', page(403), 'JP', 'HK').state, 'region_restricted')
@@ -268,12 +288,13 @@ test('public platform evidence distinguishes challenge, region, IP ban, login an
   const gemini = classify('gemini', page(200, '<title>Gemini</title><script>x=[0,2,1,200,"JPN"]</script>'), 'JP')
   assert.equal(gemini.state, 'reachable')
   assert.equal(gemini.providerRegion, 'JP')
+  assert.equal(googleRegion(',2,1,200,"XXX","K4Wwud":"HKG"'), 'HK')
   assert.equal(googleRegion('["K4WWud", "[\"USA\"]"]'.replaceAll('\\','')), 'US')
   assert.equal(verifyGemini(gemini, 'JP', 'US').evidence, 'region_disagrees')
   assert.equal(verifyGemini(gemini, 'JP', 'HK').state, 'reachable')
   assert.equal(verifyGemini(gemini, 'CN', 'CN').state, 'region_restricted')
   assert.deepEqual(classify('gemini', page(200, ',2,1,200,"RUS"'), 'HK'), {
-    state: 'region_restricted', evidence: 'region_denied', httpStatus: 200, providerRegion: 'RU', needsReview: false,
+    state: 'region_restricted', evidence: 'region_policy', httpStatus: 200, providerRegion: 'RU', needsReview: false,
   })
   assert.equal(verifyGemini(gemini, 'JP', null).state, 'unknown')
   assert.throws(() => parseInvite('http://public.example/#a'))
@@ -285,7 +306,8 @@ test('the browser-protocol probe collects separate surface evidence and verifies
   const edge = http.createServer((req, res) => {
     const [host, path] = new URL(req.url!, 'http://fixture.invalid').pathname.slice(1).split('/')
     if (path === 'cdn-cgi') { traces.push(host); res.end('ip=192.0.2.15\nloc=JP\n') }
-    else if (host === 'gemini.google.com') { assert.match(req.headers.cookie ?? '', /SOCS=/); res.end('<title>Gemini</title>,2,1,200,"USA"') }
+    else if (host === 'gemini.google.com' && !path) res.writeHead(302, { location: '/app' }).end()
+    else if (host === 'gemini.google.com' && path === 'app') res.end('<title>Gemini</title>,2,1,200,"USA"')
     else if (host === 'api.openai.com') res.end('{"cookie_consent_required":false,"region":"JP"}')
     else if (host === 'grok.com') res.writeHead(403, { 'cf-mitigated': 'challenge' }).end('challenge')
     else if (host === 'api.anthropic.com') res.writeHead(401).end('{"error":{"type":"authentication_error"}}')
@@ -316,4 +338,70 @@ test('the browser-protocol probe collects separate surface evidence and verifies
   assert.equal(ai.claudeWeb.providerRegion, 'JP')
   assert.deepEqual(traces.sort(), ['chatgpt.com', 'claude.ai', 'grok.com'])
   assert.equal(complianceCalls, 2)
+})
+
+test('a missing provider trace needs two independent agreeing hosts before a 403 can use the exit region', () => {
+  const base = Object.fromEntries(surfaces.map(s => [s, classify(s, null)])) as AiResults
+  const denied = { status: 403, challenge: false, body: '', location: '' }
+  base.claudeApi = classify('claudeApi', denied)
+  base.claudeWeb = classify('claudeWeb', { ...denied, challenge: true })
+  base.chatgptWeb = classify('chatgptWeb', null, null, 'HK')
+  base.chatgptApp = classify('chatgptApp', null, null, 'HK')
+  assert.equal(applyExitRegionFallback(base, 'HK', ['HK']), base)
+  base.grok = classify('grok', null, null, 'HK')
+  const hk = applyExitRegionFallback(base, 'HK', ['HK', null, 'HK'])
+  assert.deepEqual(hk.claudeApi, { state: 'region_restricted', evidence: 'exit_region_fallback', providerRegion: null, httpStatus: 403, needsReview: false })
+  assert.equal(base.claudeApi.state, 'unknown')
+  assert.equal(applyExitRegionFallback(base, 'HK', ['HK', 'JP']), base)
+  base.grok = classify('grok', null, null, 'US')
+  assert.equal(applyExitRegionFallback(base, 'HK', ['HK']), base)
+  for (const s of ['chatgptWeb', 'chatgptApp', 'grok'] as const) base[s] = classify(s, null, null, 'SG')
+  const sg = applyExitRegionFallback(base, 'SG', ['SG', null, 'SG'])
+  assert.equal(sg.claudeWeb.state, 'degraded_challenge')
+  assert.equal(sg.claudeWeb.providerRegion, null)
+  assert.equal(sg.claudeApi.state, 'unknown')
+})
+
+test('Gemini stops on fragmented page markers and follows at most one same-origin app redirect', async t => {
+  const redirects: string[] = []
+  let follow = '/app', appLocation = '', closed = false, traceCalls = 0
+  const chunks = ['<ti', 'tle>Ge', 'mi', 'ni</ti', 'tle>', 'x'.repeat(24 * 1024), '"K4', 'Ww', 'ud"', ':"', 'HK', '"']
+  t.mock.method(Impit.prototype, 'fetch', async (input: string) => {
+    const url = new URL(input)
+    if (url.pathname === '/cdn-cgi/trace') {
+      if (url.hostname === 'grok.com' && ++traceCalls === 1) throw new Error('ECONNRESET')
+      return new Response('loc=HK\n')
+    }
+    if (url.hostname === 'gemini.google.com') {
+      redirects.push(url.pathname)
+      if (url.pathname === '/') return new Response(null, { status: 302, headers: { location: follow } })
+      if (appLocation) return new Response(null, { status: 302, headers: { location: appLocation } })
+      let i = 0
+      return new Response(new ReadableStream({
+        pull(controller) {
+          assert.ok(i < chunks.length, 'the rest of the product page must not be read')
+          controller.enqueue(Buffer.from(chunks[i++]))
+        },
+        cancel() { closed = true },
+      }, { highWaterMark: 0 }))
+    }
+    assert.ok(['api.openai.com', 'android.chat.openai.com', 'claude.ai', 'api.anthropic.com', 'grok.com'].includes(url.hostname))
+    return new Response(null, { status: 429 })
+  })
+  const inspect = () => inspectPlatforms({ port: 1, password: 'fixture' }, 'HK', AbortSignal.timeout(3000))
+  const { gemini, grok } = await inspect()
+  assert.deepEqual(redirects.splice(0), ['/', '/app'])
+  assert.equal(gemini.state, 'reachable')
+  assert.equal(gemini.providerRegion, 'HK')
+  assert.ok(closed)
+  assert.equal(traceCalls, 2)
+  assert.equal(grok.state, 'rate_limited')
+  appLocation = '/app'
+  assert.equal((await inspect()).gemini.state, 'unknown')
+  assert.deepEqual(redirects.splice(0), ['/', '/app'])
+  for (const url of ['https://consent.google.com/m', 'https://foreign.invalid/app', 'http://gemini.google.com/app']) {
+    follow = url
+    assert.equal((await inspect()).gemini.state, 'unknown')
+    assert.deepEqual(redirects.splice(0), ['/'])
+  }
 })

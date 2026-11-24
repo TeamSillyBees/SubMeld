@@ -1,12 +1,12 @@
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import { skippedMetrics, type QualityCondition } from '../shared/group-filter.ts'
 import type { AiReading } from '../shared/quality.ts'
-import { higherFirst, platformSurfaces, qualitySorts, qualityValue, verdictFor, verdictLabels, type NodeQuality, type Platform, type QualitySnapshot, type QualitySort } from '../shared/quality-snapshot.ts'
+import { higherFirst, platformSurfaces, qualitySorts, qualityValue, reachablePlatformCount, verdictFor, verdictLabels, type NodeQuality, type Platform, type QualitySnapshot, type QualitySort } from '../shared/quality-snapshot.ts'
 import { Alert, Button } from './ui.tsx'
 
 export const qualitySortLabels: Record<QualitySort, string> = {
   https: 'HTTPS 延迟', tls: 'TLS RTT', loss: '丢包率', jitter: '抖动', speed: '下载带宽', ai: '综合解锁度',
-  ChatGPT: 'ChatGPT', Gemini: 'Gemini', Claude: 'Claude', Grok: 'Grok',
+  ChatGPT: 'ChatGPT', Gemini: 'Gemini Web', Claude: 'Claude', Grok: 'Grok',
 }
 export const stateLabels: Record<AiReading['state'], string> = {
   reachable: '入口可达', unavailable: '不可用', authentication: '需要登录', region_restricted: '地区受限', region_mismatch: '地区不一致',
@@ -36,7 +36,7 @@ export function NodeQualityValue({ row, sort }: { row?: NodeQuality; sort: Quali
   if (!row.available) return <span className="danger-text">连接失败</span>
   const value = qualityValue(row, sort)
   if (value == null) return row.speedFailed && sort === 'speed' || sort === 'tls' || sort === 'https' ? <span className="danger-text">测量失败</span> : <span className="muted" aria-label="未测">-</span>
-  if (sort === 'ai') return <span title="每个平台最高 3 分，按已确认的入口状态计分">{value} / 12 分</span>
+  if (sort === 'ai') return <span title="先按全入口或部分入口可达的平台数排序，再比较总分">{reachablePlatformCount(row)} 个平台可达 · {value} 分</span>
   if (sort in platformSurfaces) {
     return <span>{verdictLabels[verdictFor(row, sort as Platform)!]}</span>
   }

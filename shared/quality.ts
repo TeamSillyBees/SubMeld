@@ -10,7 +10,7 @@ export const qualityConfig = z.strictObject({
 })
 export type QualityConfig = z.infer<typeof qualityConfig>
 export const aiStates = ['reachable', 'unavailable', 'authentication', 'region_restricted', 'region_mismatch', 'challenge', 'degraded_challenge', 'ip_blocked', 'rate_limited', 'unknown', 'network_error'] as const
-export const evidenceTypes = ['web_entry', 'compliance_json', 'app_gateway', 'http_denied', 'login_redirect', 'credentials_required', 'region_denied', 'region_disagrees', 'region_unconfirmed', 'cf_challenge', 'ip_denied', 'rate_limit', 'unrecognized', 'network'] as const
+export const evidenceTypes = ['web_entry', 'compliance_json', 'app_gateway', 'http_denied', 'disallowed_isp', 'login_redirect', 'consent_redirect', 'credentials_required', 'region_denied', 'region_policy', 'region_disagrees', 'region_unconfirmed', 'exit_region_fallback', 'cf_challenge', 'bot_challenge', 'ip_denied', 'rate_limit', 'unrecognized', 'network'] as const
 const country = z.string().regex(/^[A-Z]{2}$/)
 const aiReading = z.strictObject({
   state: z.enum(aiStates), evidence: z.enum(evidenceTypes), httpStatus: integer(100, 599).nullable(),
@@ -19,7 +19,7 @@ const aiReading = z.strictObject({
 export type AiReading = z.infer<typeof aiReading>
 export type AiResults = Record<Surface, AiReading>
 const ms = z.number().nonnegative().max(600_000)
-export const latencySample = z.strictObject({ tlsMs: ms.nullable(), httpsMs: ms.nullable() })
+export const latencySample = z.strictObject({ tlsMs: ms.nullable(), httpsMs: ms.nullable(), httpStatus: integer(100, 599).optional() })
 export type LatencySample = z.infer<typeof latencySample>
 const speedReading = z.strictObject({
   bytes: integer(0, 32 * 1024 ** 2), elapsedMs: ms, averageBps: z.number().nonnegative(), peakBps: z.number().nonnegative(),
@@ -35,7 +35,7 @@ export const assignmentSchema = z.object({
 })
 export type Assignment = z.infer<typeof assignmentSchema>
 export const resultRow = z.strictObject({
-  key: qualityKey, available: z.boolean(), error: z.enum(['invalid_node', 'no_response', 'info_node']).nullable(),
+  key: qualityKey, available: z.boolean(), error: z.enum(['invalid_node', 'no_response', 'https_no_response', 'unexpected_status', 'info_node']).nullable(),
   samples: z.array(latencySample).max(8), tlsMedianMs: ms.nullable(), httpsMedianMs: ms.nullable(),
   jitterMs: ms.nullable(), lossRate: z.number().min(0).max(1).nullable(),
   exit: z.strictObject({ ip: z.union([z.ipv4(), z.ipv6()]), region: country.nullable() }).nullable(),

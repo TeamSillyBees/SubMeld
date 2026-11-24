@@ -1,5 +1,5 @@
-import type { AiReading, AiResults, QualityJob, QualityReport } from './quality.ts'
-import { isSubscriptionNotice, surfaces, type Surface } from './quality-options.ts'
+import type { AiReading, AiResults, QualityJob, QualityReport, QualityRow } from './quality.ts'
+import { aiSkipReason, isSubscriptionNotice, surfaces, type Surface } from './quality-options.ts'
 
 export const platformSurfaces = {
   ChatGPT: ['chatgptWeb', 'chatgptApp'], Gemini: ['gemini'], Claude: ['claudeWeb', 'claudeApi'], Grok: ['grok'],
@@ -35,6 +35,7 @@ export interface NodeQuality {
   // Published snapshots from earlier releases contain only the fields above.
   jitterMs?: number | null
   exitRegion?: string | null
+  exitRegionInferred?: true
   ipStack?: 'ipv4' | 'ipv6' | null
   infoNode?: boolean
   platforms?: PlatformResults | null
@@ -50,25 +51,35 @@ const reached = (r: AiReading) => r.state === 'reachable' && !r.needsReview
 export function platformVerdict(ai: AiResults, platform: Platform): Verdict | null {
   const readings = platformSurfaces[platform].map(s => ai[s])
   if (readings.every(reached)) return 'unlocked'
-  if (readings.some(r => r.state === 'degraded_challenge')) return 'degraded_challenge'
+  const restricted = readings.some(r => r.state === 'region_restricted' && !r.needsReview)
+  if (restricted) return readings.some(reached) ? null : 'region_restricted'
   if (readings.some(reached)) return 'partial_unlock'
-  if (readings.some(r => r.needsReview)) return null
-  if (readings.some(r => r.state === 'region_restricted')) return 'region_restricted'
-  return 'blocked_or_unreachable'
+  if (readings.some(r => r.state === 'degraded_challenge' && !r.needsReview)) return 'degraded_challenge'
+  return readings.every(r => !r.needsReview && (r.state === 'unavailable' || r.state === 'network_error' || r.state === 'ip_blocked'))
+    ? 'blocked_or_unreachable' : null
+}
+export function inferredExitRegion(row: QualityRow): string | null {
+  if (row.exit?.region || !row.available || !row.ai || row.aiSkipped || aiSkipReason(row)) return null
+  const regions = Object.values(row.ai).flatMap(r => r.providerRegion && r.evidence !== 'exit_region_fallback' ? [r.providerRegion] : [])
+  return regions.length >= 4 && regions.every(region => region === regions[0]) ? regions[0] : null
 }
 export function qualitySnapshot(report: QualityReport): QualitySnapshot {
   const rows: QualitySnapshot['rows'] = {}
   for (const r of report.results) {
     const speedFailed = r.speed?.stop === 'error' || Boolean(r.speed && !r.speed.bytes)
-    const failed = r.ai ? surfaces.filter(s => !reached(r.ai![s])) : []
+    // Older probes could copy another node's observations onto a weak link.
+    const ai = r.aiSkipped || aiSkipReason(r) ? null : r.ai
+    const failed = ai ? surfaces.filter(s => !reached(ai[s])) : []
+    const inferred = inferredExitRegion(r)
     rows[r.key] = {
       available: r.available, httpsMs: r.httpsMedianMs, tlsMs: r.tlsMedianMs, lossRate: r.lossRate, jitterMs: r.jitterMs,
-      exitRegion: r.exit?.region ?? null, ipStack: r.exit ? (r.exit.ip.includes(':') ? 'ipv6' : 'ipv4') : null,
+      exitRegion: r.exit?.region ?? inferred, ...(inferred && { exitRegionInferred: true }),
+      ipStack: r.exit ? (r.exit.ip.includes(':') ? 'ipv6' : 'ipv4') : null,
       infoNode: r.error === 'info_node' || isSubscriptionNotice(r.name),
       speedMbps: r.speed && !speedFailed ? r.speed.averageBps * 8 / 1_000_000 : null, speedFailed,
-      reachable: r.ai ? surfaces.filter(s => reached(r.ai![s])) : null,
-      ...(failed.length > 0 && { surfaceIssues: Object.fromEntries(failed.map(s => [s, r.ai![s].state === 'reachable' ? 'unknown' : r.ai![s].state])) }),
-      platforms: r.ai ? Object.fromEntries(platforms.map(p => [p, platformVerdict(r.ai!, p)])) as PlatformResults : null,
+      reachable: ai ? surfaces.filter(s => reached(ai[s])) : null,
+      ...(ai && failed.length > 0 && { surfaceIssues: Object.fromEntries(failed.map(s => [s, ai[s].state === 'reachable' ? 'unknown' : ai[s].state])) }),
+      platforms: ai ? Object.fromEntries(platforms.map(p => [p, platformVerdict(ai, p)])) as PlatformResults : null,
     }
   }
   return { reportId: report.jobId, targetDeviceId: report.targetDeviceId ?? null, targetDeviceName: report.targetDeviceName ?? null,
@@ -91,8 +102,7 @@ export function qualityValue(row: NodeQuality, sort: QualitySort): number | null
     return scores.length ? scores.reduce((sum, n) => sum + n, 0) : null
   }
   const verdict = verdictFor(row, sort)
-  // Both failure verdicts occupy the lowest of the four sorting and filtering levels.
-  return verdict === null ? null : Math.max(0, verdictScores[verdict])
+  return verdict === null ? null : verdictScores[verdict]
 }
 
 export const higherFirst = (sort: QualitySort) => sort === 'speed' || sort === 'ai' || Object.hasOwn(platformSurfaces, sort)
@@ -100,16 +110,23 @@ function metric(a: number | null | undefined, b: number | null | undefined, desc
   if (a == null || b == null) return Number(a == null) - Number(b == null)
   return descending ? b - a : a - b
 }
+export const reachablePlatformCount = (r: NodeQuality) => platforms.filter(p => (qualityValue(r, p) ?? -1) >= verdictScores.partial_unlock).length
 const fullCount = (r: NodeQuality) => platforms.filter(p => verdictFor(r, p) === 'unlocked').length
+function compareAi(a: NodeQuality, b: NodeQuality, descending: boolean) {
+  return metric(reachablePlatformCount(a), reachablePlatformCount(b), descending)
+    || metric(qualityValue(a, 'ai'), qualityValue(b, 'ai'), descending)
+    || metric(fullCount(a), fullCount(b), descending)
+}
 export function compareQuality(a: NodeQuality | undefined, b: NodeQuality | undefined, sort: QualitySort, reverse = false, aNotice = false, bNotice = false) {
   const rank = (r: NodeQuality | undefined, notice: boolean) => notice || r?.infoNode ? 4 : !r ? 2 : !r.available ? 3 : qualityValue(r, sort) === null ? 1 : 0
   const ar = rank(a, aNotice), br = rank(b, bNotice)
   if (ar || br || !a || !b) return ar - br
-  const primary = metric(qualityValue(a, sort), qualityValue(b, sort), higherFirst(sort) !== reverse)
+  const descending = higherFirst(sort) !== reverse
+  const primary = sort === 'ai' ? compareAi(a, b, descending) : metric(qualityValue(a, sort), qualityValue(b, sort), descending)
   if (primary) return primary
   const loss = metric(a.lossRate, b.lossRate), jitter = metric(a.jitterMs, b.jitterMs), latency = metric(a.httpsMs, b.httpsMs)
   if (sort === 'https' || sort === 'tls') return loss || jitter
   if (sort === 'loss') return jitter || latency
   if (sort === 'jitter' || sort === 'speed') return loss || latency
-  return (sort === 'ai' ? fullCount(b) - fullCount(a) : metric(qualityValue(a, 'ai'), qualityValue(b, 'ai'), true)) || loss || latency
+  return (sort === 'ai' ? 0 : compareAi(a, b, true)) || loss || latency
 }

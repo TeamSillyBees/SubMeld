@@ -25,15 +25,15 @@ function removalDetail(reason: string, node: NodeView, row: NodeQuality | undefi
   if (reason === 'loss' && row.lossRate != null) return Math.round(row.lossRate * 100) + '%'
   if (reason === 'bandwidth') return row.speedMbps != null ? row.speedMbps.toFixed(1) + ' Mbps' : '测速失败'
   if (reason !== 'region' && reason !== 'platform') return ''
-  const details = reason === 'region' && row.exitRegion ? ['实测出口 ' + row.exitRegion] : []
+  const details = reason === 'region' && row.exitRegion ? [(row.exitRegionInferred ? '推定出口 ' : '实测出口 ') + row.exitRegion] : []
   if (aiEnabled && q) {
     const entries = new Set(q.platforms)
     for (const platform of q.aiPlatforms ?? []) {
       const verdict = verdictFor(row, platform)
-      if (verdict && verdictScores[verdict] < (q.minUnlockLevel ?? 2)) {
-        const failed = platformSurfaces[platform].filter(s => row.surfaceIssues?.[s])
+      const failed = platformSurfaces[platform].filter(s => row.surfaceIssues?.[s])
+      if (!verdict || verdictScores[verdict] < (q.minUnlockLevel ?? 2) || failed.some(s => row.surfaceIssues?.[s] === 'region_restricted')) {
         if (failed.length) failed.forEach(s => entries.add(s))
-        else details.push(platform + ' ' + verdictLabels[verdict])
+        else if (verdict) details.push(platform + ' ' + verdictLabels[verdict])
       }
     }
     for (const s of entries) if (!row.reachable?.includes(s)) {
@@ -104,7 +104,7 @@ export function GroupFilter({ member, index, sources, nodes, onChange, onNew, he
         return <button key={key} type="button" disabled={!details} aria-label={stageNames[key] + ' ' + count + (details ? '，查看淘汰原因' : '')}
           onClick={() => { setStage(key); setReasonOffset(0) }}><span>{stageNames[key]}</span><strong>{count}</strong>
           <progress aria-hidden="true" max={Math.max(filter.stageCounts.source, 1)} value={count} /></button>
-      })}</div>{filter.fallback && <p>兜底恢复 {matches.length} 个节点</p>}{filter.relaxed && <p>放宽条件后保留 {matches.length} 个节点</p>}
+      })}</div>{filter.fallback && <p>兜底恢复 {matches.length} 个节点</p>}{filter.relaxed && <p>{filter.relaxation === 'latency' ? '取消延迟上限' : '允许浏览器验证'}后保留 {matches.length} 个节点</p>}
         {!!Object.keys(filter.reasons).length && <p className="field-note muted">{Object.entries(filter.reasons).map(([reason, n]) => reasonNames[reason] + ' ' + n).join(' · ')}</p>}
         {!!filter.untested.length && <QualityControl selected={filter.untested.slice(0, maxQualityNodes)} filtered={filter.untested.slice(0, maxQualityNodes)} supplement bandwidth={value.quality.minBandwidthMbps != null} />}
       </div>}

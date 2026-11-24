@@ -1,4 +1,4 @@
-import { type AgentReport, type AiResults, type Assignment, type Progress, type QualityRow } from '../shared/quality.ts'
+import type { AgentReport, Assignment, Progress, QualityRow } from '../shared/quality.ts'
 import { aiSkipReason, isSubscriptionNotice } from '../shared/quality-options.ts'
 import { withCore } from './core.ts'
 import { inspectPlatforms } from './ai.ts'
@@ -38,31 +38,28 @@ export async function run(job: Assignment, binary: string, signal: AbortSignal, 
       })
     }
     if (config.ai) {
-      const exits = new Map<string, typeof alive>()
-      const weakByExit = new Map<string, typeof alive>()
+      // The same general-purpose exit IP can lead to different provider routes.
+      const byExit = new Map<string, typeof alive>()
+      let total = 0
       for (const route of alive) {
         const row = rows.get(route.node.key)!
         const reason = aiSkipReason(row)
-        if (reason) row.aiSkipped = reason
-        // Without an exit IP, each healthy tunnel needs its own provider observations.
-        const groupKey = row.exit?.ip ?? route.node.key
-        const groups = reason ? weakByExit : exits
-        const members = groups.get(groupKey) ?? []
-        members.push(route)
-        groups.set(groupKey, members)
+        if (reason) { row.aiSkipped = reason; continue }
+        const key = row.exit?.ip ?? route.node.key
+        const group = byExit.get(key)
+        if (group) group.push(route)
+        else byExit.set(key, [route])
+        total++
       }
       done = 0
-      progress({ stage: 'ai', done, total: exits.size })
-      await pool([...exits], Math.min(6, config.concurrency), active, async ([groupKey, members]) => {
-        const first = members.reduce((best, route) => (rows.get(route.node.key)!.httpsMedianMs ?? Infinity) < (rows.get(best.node.key)!.httpsMedianMs ?? Infinity) ? route : best)
-        const ai: AiResults = await inspect(first.outlet, rows.get(first.node.key)!.exit?.region ?? null, active)
-        const cached = weakByExit.get(groupKey) ?? []
-        for (const { node } of [...members, ...cached]) {
+      progress({ stage: 'ai', done, total })
+      await pool([...byExit.values()], Math.min(6, config.concurrency), active, async group => {
+        for (const { node, outlet } of group) {
+          active.throwIfAborted()
           const row = rows.get(node.key)!
-          row.ai = ai
-          delete row.aiSkipped
+          row.ai = await inspect(outlet, row.exit?.region ?? null, active)
+          progress({ stage: 'ai', done: ++done, total })
         }
-        progress({ stage: 'ai', done: ++done, total: exits.size })
       })
     }
     active.throwIfAborted()

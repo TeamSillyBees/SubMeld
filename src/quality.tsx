@@ -132,7 +132,8 @@ function QualityDialog({ selected, filtered, close, supplement, bandwidth }: { s
           {config.bandwidth && <FieldGroup className="form-grid three"><NumberChoice label="单节点流量" value={config.mebibytes} options={[1, 2, 4, 8, 16, 32]} unit=" MiB" onChange={n => set('mebibytes', n)} />
             <NumberChoice label="最长时长" value={config.seconds} options={[2, 5, 10, 15]} unit=" 秒" onChange={n => set('seconds', n)} />
             <NumberChoice label="下载并发" value={config.speedConcurrency} options={[1, 2]} onChange={n => set('speedConcurrency', n)} /></FieldGroup>}</section>
-        <section className="quality-section"><Toggle label="AI 平台检测" checked={config.ai} onChange={v => set('ai', v)} detail="检查 ChatGPT、Gemini、Claude 与 Grok。相同出口 IP 共享结果。" /></section>
+        <section className="quality-section"><Toggle label="AI 平台检测" checked={config.ai} onChange={v => set('ai', v)}
+          detail={targetDevice?.protocolVersion === 2 ? '所选探针按出口 IP 复用 AI 结果。更新至 1.3.1 可逐节点检测。' : '逐节点检查 ChatGPT、Gemini Web、Claude 与 Grok 的公开入口。弱网节点会跳过。'} /></section>
       </>}
       {job?.status === 'waiting' && <>
         <div className="quality-heading"><div><h3 className="quality-title"><Laptop />等待{job.targetDeviceName ? ' ' + job.targetDeviceName + ' 执行' : '改派探针'}</h3>
@@ -143,7 +144,7 @@ function QualityDialog({ selected, filtered, close, supplement, bandwidth }: { s
           <Button size="small" variant="ghost" disabled={busy} onClick={() => action(async () => { await call('quality/cancel', { id: job.id }) })}>取消任务</Button></div>
       </>}
       {job?.status === 'running' && <div className="quality-running" role="status"><div className="quality-heading"><h3 className="quality-title">{stageNames[job.progress.stage]}</h3><Badge tone="success" dot>探针已连接</Badge></div>
-        <progress aria-label="本阶段检测进度" max={Math.max(1, job.progress.total)} value={job.progress.done} /><p>{job.progress.done} / {job.progress.total} {job.progress.stage === 'ai' ? '个出口' : '个节点'} · 关闭面板后检测会继续。</p>
+        <progress aria-label="本阶段检测进度" max={Math.max(1, job.progress.total)} value={job.progress.done} /><p>{job.progress.done} / {job.progress.total} 项 · 关闭面板后检测会继续。</p>
         <Button size="small" busy={busy} onClick={() => action(async () => { await call('quality/cancel', { id: job.id }) })}>取消任务</Button></div>}
       {job?.status === 'completed' && (report?.jobId === job.id ? <><ReportView key={job.id} report={report} /><div className="actions"><Button size="small" busy={quality.saving} onClick={async () => { if (await quality.selectReport(job.id)) { quality.refresh(); close(); void navigate('publish') } }}>锁定报告并预览代理组差异</Button>{quality.saveError && <span role="alert">{quality.saveError}</span>}</div></> : !readError && <p role="status">正在读取报告…</p>)}
       {job && !live(job) && job.status !== 'completed' && <Alert tone={job.status === 'failed' ? 'danger' : 'info'} title={jobNames[job.status]}>

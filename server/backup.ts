@@ -22,6 +22,7 @@ const snapshotSchema = z.strictObject({ reportId: z.uuid(), config: z.strictObje
   targetDeviceId: z.uuid().nullable().optional(), targetDeviceName: z.string().max(128).nullable().optional(), rows: z.record(qualityKey, z.strictObject({
   available: z.boolean(), httpsMs: metric, tlsMs: metric, lossRate: z.number().min(0).max(1).nullable(),
   jitterMs: metric.optional(), infoNode: z.boolean().optional(), exitRegion: z.string().regex(/^[A-Z]{2}$/).nullable().optional(),
+  exitRegionInferred: z.literal(true).optional(),
   ipStack: z.enum(['ipv4', 'ipv6']).nullable().optional(),
   platforms: z.record(z.enum(platforms), z.enum(['unlocked', 'partial_unlock', 'degraded_challenge', 'region_restricted', 'blocked_or_unreachable']).nullable()).nullable().optional(),
   surfaceIssues: z.partialRecord(z.enum(surfaces), z.enum(aiStates)).optional(),

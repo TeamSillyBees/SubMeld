@@ -758,16 +758,18 @@ export function NodesPage() {
             const comment = state.notes[row.key]
             const policy = state.draft.sources.find(entry => entry.id === row.sourceId)?.filter
             const manual = policy?.manual.includes(row.id)
-            const exit = readings?.[row.key]?.exitRegion
+            const qualityRow = readings?.[row.key]
+            const exit = qualityRow?.exitRegion
             const marked = row.region === 'unknown' ? identifyRegion(row.originalName) : row.region
             return <TableRow key={row.key} className={cn(row.id === route.detail && 'row-highlight')}>
               <TableCell><Checkbox aria-label={'选择节点 ' + row.name} checked={selectedSet.has(row.key)} onCheckedChange={enabled => setSelected(enabled ? [...selected, row.key] : selected.filter(key => key !== row.key))} /></TableCell>
               <TableCell mobileLabel="状态"><Badge tone={row.kept ? 'success' : 'neutral'}>{row.kept ? '已保留' : '已排除'}</Badge></TableCell>
               <TableCell className="table-row-title"><strong className="node-final-name" translate="no" title={'原名 ' + row.originalName}>{row.name}</strong>
                 <div className="node-meta"><RouteLink page="sources" id={row.sourceId} detail="filter">{row.sourceName}</RouteLink><span>{regionLabel(row.region)}</span><code>{row.type.toUpperCase()}</code>
-                  {exit && exit !== marked && <Badge tone={marked === 'unknown' ? 'neutral' : 'warning'}>{marked !== 'unknown' && '标称 ' + marked + ' · '}实测 {exit}</Badge>}
+                  {exit && (exit !== marked || qualityRow.exitRegionInferred) && <Badge tone={exit === marked || marked === 'unknown' ? 'neutral' : 'warning'}>
+                    {marked !== 'unknown' && exit !== marked && '标称 ' + marked + ' · '}{qualityRow.exitRegionInferred ? '推定' : '实测'} {exit}</Badge>}
                   {comment?.favorite && <Star aria-label="已收藏" />}</div>{comment?.note && <small className="muted">{comment.note}</small>}</TableCell>
-              {(quality.reportId || sortKey) && <TableCell mobileLabel={qualitySortLabels[sortKey ?? 'https']}>{quality.ready ? <NodeQualityValue row={readings?.[row.key]} sort={sortKey ?? 'https'} /> : '读取中…'}</TableCell>}
+              {(quality.reportId || sortKey) && <TableCell mobileLabel={qualitySortLabels[sortKey ?? 'https']}>{quality.ready ? <NodeQualityValue row={qualityRow} sort={sortKey ?? 'https'} /> : '读取中…'}</TableCell>}
               <TableCell mobileLabel="筛选依据"><span className="muted">{row.reasons.length ? row.reasons.join(' · ') : policy?.keep.includes(row.region) ? '命中保留地区 · ' + regionLabel(row.region) : '符合当前筛选条件'}</span>
                 {row.collision && <div><Badge tone="danger">名称冲突</Badge></div>}
                 {!!row.duplicateCount && <small className="warning-text">精确重复 {row.duplicateCount} · {row.duplicates?.map(item => item.source).join('、')}</small>}</TableCell>

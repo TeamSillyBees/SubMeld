@@ -14,7 +14,7 @@ import { test } from 'node:test'
 import tls from 'node:tls'
 import { classify, inspectPlatforms } from '../agent/ai.ts'
 import { withCore } from '../agent/core.ts'
-import { measureSpeed } from '../agent/measure.ts'
+import { measureLatency, measureSpeed } from '../agent/measure.ts'
 import { run } from '../agent/run.ts'
 import { qualityDefaults, reportSchema, surfaces, type AiResults, type Assignment, type Progress } from '../shared/quality.ts'
 
@@ -47,12 +47,19 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
   const previousTrust = tls.getCACertificates()
   tls.setDefaultCACertificates([...previousTrust, cert])
   t.after(() => tls.setDefaultCACertificates(previousTrust))
-  const counts = { sample: 0, downloads: 0 }
-  async function origin(ip: string) {
+  const counts = { sample: 0, downloads: 0, retryExit: 0 }
+  async function origin(ip: string, weak = false) {
+    let rounds = 0
     const origin = https.createServer({ cert, key }, (req, res) => {
       const url = new URL(req.url!, 'https://fixture.invalid')
-      if (url.pathname === '/latency') { counts.sample++; res.writeHead(204).end() }
+      if (url.pathname === '/latency') { counts.sample++; res.writeHead(weak && ++rounds % 2 === 0 ? 503 : 204).end() }
+      else if (url.pathname === '/landing') res.writeHead(302, { location: '/login' }).end()
+      else if (url.pathname === '/closed') res.destroy()
       else if (url.pathname === '/exit') res.end('ip=' + ip + '\nloc=JP\n')
+      else if (url.pathname === '/retry-exit') {
+        if (++counts.retryExit === 1) res.destroy()
+        else res.end('ip=' + ip + '\nloc=JP\n')
+      }
       else if (url.pathname === '/empty-exit') res.writeHead(503).end()
       else if (url.pathname === '/fallback-exit') res.end(JSON.stringify({ ip, country: 'JP' }))
       else if (url.pathname === '/download') { counts.downloads++; res.end(Buffer.alloc(Number(url.searchParams.get('bytes')))) }
@@ -65,18 +72,28 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
     t.after(cleanupServer(origin))
     return port
   }
-  const ports = [await origin('192.0.2.10'), await origin('192.0.2.11')]
+  const ports = [await origin('192.0.2.10'), await origin('192.0.2.11'), await origin('192.0.2.10', true)]
+  // Observe the AI client's protocol offer locally. Its normal certificate validation rejects this fixture.
+  const offered = new Set<string>()
+  const aiEndpoint = tls.createServer({ cert, key, ALPNCallback({ protocols }) {
+    for (const protocol of protocols) offered.add(protocol)
+    return protocols.includes('h2') ? 'h2' : undefined
+  } }, socket => socket.end())
+  const aiPort = await listen(aiEndpoint)
+  t.after(cleanupServer(aiEndpoint))
   const outbound = http.createServer()
   const auths = new Set<string>()
   const aiHosts = new Set<string>()
   outbound.on('connect', (req, client) => {
     const auth = Buffer.from((req.headers['proxy-authorization'] ?? '').slice(6), 'base64').toString()
     auths.add(auth)
-    if (req.url !== 'fixture.invalid:443' || auth.startsWith('down:')) {
-      if (req.url !== 'fixture.invalid:443') aiHosts.add(req.url!)
+    if (auth.startsWith('down:')) {
       client.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n'); return
     }
-    const upstream = net.connect(ports[auth.startsWith('b:') ? 1 : 0], '127.0.0.1', () => {
+    const aiRequest = req.url !== 'fixture.invalid:443'
+    if (aiRequest) aiHosts.add(req.url!)
+    const originPort = ports[auth.startsWith('weak:') ? 2 : auth.startsWith('b:') ? 1 : 0]
+    const upstream = net.connect(aiRequest ? aiPort : originPort, '127.0.0.1', () => {
       client.write('HTTP/1.1 200 Connection established\r\n\r\n')
       client.pipe(upstream).pipe(client)
     })
@@ -96,7 +113,9 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
   let aiChecks = 0
   const inspect = async () => {
     aiChecks++
-    return Object.fromEntries(surfaces.map(k => [k, classify(k, null)])) as AiResults
+    const ai = Object.fromEntries(surfaces.map(k => [k, classify(k, null)])) as AiResults
+    if (aiChecks % 2 === 0) ai.grok = classify('grok', { status: 200, location: '', challenge: false, body: '<title>Grok</title>' })
+    return ai
   }
   const stages: Progress[] = []
   const report = await run(job, binary, AbortSignal.timeout(55_000), p => stages.push(p), endpoints, inspect)
@@ -106,9 +125,10 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
   assert.equal(report.results.filter(row => row.available).length, 205)
   assert.ok(report.results.slice(0, -1).every(row => row.exit?.ip === '192.0.2.10'))
   assert.equal(report.results.at(-1)!.exit!.ip, '192.0.2.11')
-  assert.equal(aiChecks, 2)
+  assert.equal(aiChecks, 205)
+  assert.deepEqual(new Set(report.results.slice(0, -1).map(row => row.ai!.grok.state)), new Set(['network_error', 'reachable']))
   assert.equal(counts.downloads, 0)
-  assert.ok(stages.some(p => p.stage === 'ai' && p.total === 2))
+  assert.ok(stages.some(p => p.stage === 'ai' && p.done === 205 && p.total === 205))
   const down = { ...nodes[1], connection: { ...nodes[1].connection, username: 'down' } }
   const invalid = { ...nodes[2], connection: { type: 'ss', server: '127.0.0.1', port, cipher: 'invalid-cipher', password: 'fixture' } }
   // Only the preflight resolver knows this name. The child must use its temporary hosts entry.
@@ -127,10 +147,28 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
   const unknownExits = await run({ ...job, nodes: nodes.slice(0, 2) }, binary, AbortSignal.timeout(20_000), () => {},
     { ...endpoints, exit: 'https://fixture.invalid/empty-exit', exitFallback: 'https://fixture.invalid/empty-exit' }, inspect)
   assert.ok(unknownExits.results.every(row => row.available && row.exit === null && row.ai && !row.aiSkipped))
-  assert.equal(aiChecks, 4)
+  assert.equal(aiChecks, 207)
+  const weak = { ...nodes[1], connection: { ...nodes[1].connection, username: 'weak' } }
+  const shared = await run({ ...job, nodes: [nodes[0], weak] }, binary, AbortSignal.timeout(20_000), () => {}, endpoints, inspect)
+  assert.deepEqual(shared.results[0].exit, shared.results[1].exit)
+  assert.ok(shared.results[0].ai)
+  assert.equal(shared.results[1].lossRate, .5)
+  assert.equal(shared.results[1].aiSkipped, 'weak_connection')
+  assert.equal(shared.results[1].ai, null)
+  assert.equal(aiChecks, 208)
   let usedPort = 0
   await withCore(binary, [nodes[0]], AbortSignal.timeout(45_000), async ([route], _, signal) => {
     usedPort = route.outlet.port
+    const measure = (latency: string, exit = endpoints.exit) => measureLatency(nodes[0].key, route.outlet, configBase, signal, { ...endpoints, latency, exit })
+    const retried = await measure(endpoints.latency, 'https://fixture.invalid/retry-exit')
+    assert.deepEqual(retried.exit, { ip: '192.0.2.10', region: 'JP' })
+    assert.equal(counts.retryExit, 2)
+    const landing = await measure('https://fixture.invalid/landing')
+    assert.equal(landing.error, 'unexpected_status')
+    assert.ok(landing.samples.every(s => s.httpStatus === 302 && s.tlsMs !== null && s.httpsMs === null))
+    const closed = await measure('https://fixture.invalid/closed')
+    assert.equal(closed.error, 'https_no_response')
+    assert.ok(closed.samples.every(s => s.httpStatus === undefined && s.tlsMs !== null))
     const slow = await measureSpeed(route.outlet, configBase, signal, 'https://fixture.invalid/slow')
     assert.equal(slow.stop, 'duration')
     assert.ok(slow.bytes > 0 && slow.bytes < 1024 ** 2)
@@ -140,6 +178,7 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
     assert.ok(surfaces.every(s => ai[s].state === 'network_error' && !ai[s].needsReview))
   })
   assert.deepEqual([...aiHosts].sort(), ['android.chat.openai.com', 'api.anthropic.com', 'api.openai.com', 'chatgpt.com', 'claude.ai', 'gemini.google.com', 'grok.com'].map(h => h + ':443').sort())
+  assert.ok(offered.has('h2'))
   const reused = net.createServer()
   reused.listen(usedPort, '127.0.0.1')
   await once(reused, 'listening')

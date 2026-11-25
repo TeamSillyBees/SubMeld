@@ -36,7 +36,7 @@ sudo submeld-probe install
 
 - 在两种系统上运行 `submeld-probe status` 可查看服务状态和开机自启状态。
 - Windows 的日志和本地报告分别位于 `%ProgramData%\SubMeldProbe\logs` 和 `%ProgramData%\SubMeldProbe\reports`。Linux 使用 `journalctl -u submeld-probe.service` 查看日志，本地报告在 `/var/lib/submeld-probe/reports/`。
-- 更新时先升级工作台，再从工作台下载探针安装包，在任务空闲时重新运行本系统的两条安装命令。探针 2.0.0 使用协议 4 上报细分判据，需要工作台与探针同步升级，已有配对可以沿用。
+- 更新时先升级工作台，再从工作台下载探针安装包，在任务空闲时重新运行本系统的两条安装命令。探针 2.0.1 使用协议 4 上报细分判据（含 Antigravity 检测），新版工作台兼容 2.0.0 探针报告，已有配对可以沿用。
 - 要更换电脑，在工作台展开常驻探针并选择「解除配对」。这台探针的待执行和运行中任务会取消。新电脑使用新的配对链接。已安装的电脑可以运行 `submeld-probe install --pair` 重新登记。Linux 安装、更新和卸载命令前加 `sudo`。
 - 卸载时先运行 `submeld-probe uninstall`，再运行 `npm uninstall --global submeld-quality-probe`。已有报告保存在数据目录。电脑离线卸载时，还需在工作台解除原配对。
 
@@ -59,7 +59,8 @@ sudo submeld-probe install
 平台 trace 首次预算 5 秒，断连或超时后可再试 3 秒。仍缺少该站点地区时，只有至少一个其他域名的地区与通用出口一致，且本节点所有已知观测均一致，才能在未决 403 上参考出口地区。详情标注推定依据，报告的 `providerRegion` 保留原始观测。
 
 - **ChatGPT** 分别记录合规接口和移动网关。移动网关返回 403 时，只有命中已知的未签名网关 JSON 提示才记为入口可达。地区拒绝、机房限制和浏览器验证各有独立判据。[ChatGPT 支持地区](https://help.openai.com/en/articles/7947663-chatgpt-supported-countries)
-- **Gemini Web** 测量个人账号的网页入口。探针最多跟随一次同域 `/app` 跳转，读到产品标题和 Google 地区标记后即停止下载。异常流量验证和同意页分别记录。Gemini API 的可用地区由 Google 单独列出。[网页版支持地区](https://support.google.com/gemini/answer/13575153?hl=en) · [API 支持地区](https://ai.google.dev/gemini-api/docs/available-regions)
+- **Gemini Web** 测量个人账号的网页入口。探针附带 `SOCS` 同意 Cookie 并最多跟随一次同域 `/app` 跳转，读到产品标题和 Google 地区标记后即停止下载；若未提取到地区则补发 `batchexecute` (`K4WWud`) 获取 Google 认定地区。异常流量验证和同意页分别记录。Gemini API 的可用地区由 Google 单独列出。[网页版支持地区](https://support.google.com/gemini/answer/13575153?hl=en) · [API 支持地区](https://ai.google.dev/gemini-api/docs/available-regions)
+- **Antigravity** 同时探测入口页 `https://antigravity.google/` 与网关 `https://daily-cloudcode-pa.googleapis.com/` 的 TLS/HTTP 可达性，并复用同轮 Google 认定地区对照独立不可用地区表（包含 CN、HK、MO、RU、BY、IR、KP、CU、SY 等）判定地区合规与分流差异。[Antigravity 地理可用性](https://antigravity.google/docs/faq#what-is-google-antigravitys-geographical-availability) · [网络允许列表](https://antigravity.google/docs/enterprise)
 
 全入口可达、部分入口可达、需要浏览器验证、地区受限、封禁或连接失败分别计 3、2、1、0、−1 分。Web 遇到验证而 API 可达时记 2 分。地区受限加浏览器验证记 0 分。可达与地区受限并存时，保留各入口读数并将平台等级留空。
 

@@ -405,7 +405,7 @@ export function QualitySchedulePanel({
 
       <Panel
         title={<>AI 解锁检测 <Badge tone={form.ai.enabled ? 'success' : 'neutral'}>{form.ai.enabled ? '已启用' : '未启用'}</Badge></>}
-        detail="独立探测 ChatGPT Web、ChatGPT APP 与 Gemini Web 解锁状态，不影响可用率窗口。"
+        detail="独立探测 ChatGPT Web、ChatGPT APP、Gemini Web 与 Antigravity 解锁状态，不影响可用率窗口。"
         actions={
           <Button size="small" icon={Play} busy={runningKind === 'ai'} disabled={busy || !loaded || dirty || !savedTargetReady || savedNodeCount === 0} onClick={() => void runNow('ai')}>
             立即执行 AI 检测

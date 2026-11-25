@@ -3,12 +3,13 @@ import AxeBuilder from '@axe-core/playwright'
 
 export type QualityTab = 'schedules' | 'reports' | 'probes'
 export type AiTone = 'success' | 'danger' | 'warning'
-export type AiSurfaceName = 'ChatGPT Web' | 'ChatGPT APP' | 'Gemini Web'
+export type AiSurfaceName = 'ChatGPT Web' | 'ChatGPT APP' | 'Gemini Web' | 'Antigravity'
 
 export const AI_SURFACE_ORDER: readonly AiSurfaceName[] = [
   'ChatGPT Web',
   'ChatGPT APP',
   'Gemini Web',
+  'Antigravity',
 ] as const
 
 export const LEGACY_AI_TERMS = ['Grok', 'grok', 'Claude', 'claude', 'claudeWeb', 'claudeApi'] as const
@@ -19,6 +20,7 @@ const SURFACE_NAME_REGEX: Record<AiSurfaceName, RegExp> = {
   'ChatGPT Web': /ChatGPT\s*Web/i,
   'ChatGPT APP': /ChatGPT\s*APP/i,
   'Gemini Web': /Gemini\s*Web/i,
+  Antigravity: /Antigravity/i,
 }
 
 const NON_AI_BADGE_PATTERNS: readonly RegExp[] = [
@@ -488,10 +490,11 @@ async function assertToneVisualSemantics(badge: Locator, expectedTone: AiTone): 
   }
 }
 
-const AI_SURFACE_KEYS: Record<AiSurfaceName, 'chatgptWeb' | 'chatgptApp' | 'gemini'> = {
+const AI_SURFACE_KEYS: Record<AiSurfaceName, 'chatgptWeb' | 'chatgptApp' | 'gemini' | 'antigravity'> = {
   'ChatGPT Web': 'chatgptWeb',
   'ChatGPT APP': 'chatgptApp',
   'Gemini Web': 'gemini',
+  Antigravity: 'antigravity',
 }
 
 export async function expectAiUnlockCell(
@@ -508,7 +511,7 @@ export async function expectAiUnlockCell(
   if (isTableRow) {
     const explicitAiCell = rowOrContainer
       .locator(
-        'td[data-col="ai"], [data-ai-unlock], td:has([data-surface]), td:has(.mobile-cell-label:has-text("AI 解锁")), td:has(:is(div, span, li)[aria-label*="ChatGPT Web"]), td:has(:is(div, span, li)[aria-label*="ChatGPT APP"]), td:has(:is(div, span, li)[aria-label*="Gemini Web"])',
+        'td[data-col="ai"], [data-ai-unlock], td:has([data-surface]), td:has(.mobile-cell-label:has-text("AI 解锁")), td:has(:is(div, span, li)[aria-label*="ChatGPT Web"]), td:has(:is(div, span, li)[aria-label*="ChatGPT APP"]), td:has(:is(div, span, li)[aria-label*="Gemini Web"]), td:has(:is(div, span, li)[aria-label*="Antigravity"])',
       )
       .first()
     if ((await explicitAiCell.count()) > 0) {
@@ -748,13 +751,13 @@ export async function expectAiUnlockCell(
   const hasAnySurfaceAttr =
     (await searchRoot
       .locator(
-        '[data-surface], [aria-label*="ChatGPT Web"], [aria-label*="ChatGPT APP"], [aria-label*="Gemini Web"]',
+        '[data-surface], [aria-label*="ChatGPT Web"], [aria-label*="ChatGPT APP"], [aria-label*="Gemini Web"], [aria-label*="Antigravity"]',
       )
       .count()) > 0 ||
     (await searchRoot.evaluate(el => {
       if (el.hasAttribute('data-surface')) return true
       const aria = el.getAttribute('aria-label') ?? ''
-      return /ChatGPT\s*Web|ChatGPT\s*APP|Gemini\s*Web/i.test(aria)
+      return /ChatGPT\s*Web|ChatGPT\s*APP|Gemini\s*Web|Antigravity/i.test(aria)
     }))
 
   const resolvedBadges: Array<{ surface: AiSurfaceName; badge: Locator }> = []

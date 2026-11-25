@@ -16,11 +16,12 @@ import { group, read } from '../server/schema.ts'
 test('R1 surface contracts & protocol v4 constants match specification', () => {
   assert.equal(probeProtocol, 4)
   assert.equal(minimumProbeVersion, '2.0.0')
-  assert.deepEqual(surfaces, ['chatgptWeb', 'chatgptApp', 'gemini'])
+  assert.deepEqual(surfaces, ['chatgptWeb', 'chatgptApp', 'gemini', 'antigravity'])
   assert.deepEqual(surfaceNames, {
     chatgptWeb: 'ChatGPT Web',
     chatgptApp: 'ChatGPT APP',
     gemini: 'Gemini Web',
+    antigravity: 'Antigravity',
   })
   assert.equal(qualityDefaults.basic, true)
   assert.deepEqual(qualityPresets.ai.condition.platforms, ['chatgptWeb', 'gemini'])
@@ -67,13 +68,13 @@ test('inferredExitRegion requires >= 2 agreeing non-fallback surfaces and zero d
   const baseRow: QualityRow = {
     key: 'source01/node0001', available: true, error: null, samples: [], tlsMedianMs: 10, httpsMedianMs: 50,
     jitterMs: 1, lossRate: 0, exit: null, speed: null,
-    ai: { chatgptWeb: mk('JP'), chatgptApp: mk('JP'), gemini: mk(null) },
+    ai: { chatgptWeb: mk('JP'), chatgptApp: mk('JP'), gemini: mk(null), antigravity: mk(null) },
   }
   assert.equal(inferredExitRegion(baseRow), 'JP')
-  assert.equal(inferredExitRegion({ ...baseRow, ai: { chatgptWeb: mk('JP'), chatgptApp: mk(null), gemini: mk('JP') } }), 'JP')
-  assert.equal(inferredExitRegion({ ...baseRow, ai: { chatgptWeb: mk('JP'), chatgptApp: mk(null), gemini: mk(null) } }), null)
-  assert.equal(inferredExitRegion({ ...baseRow, ai: { chatgptWeb: mk('JP'), chatgptApp: mk('US'), gemini: mk('JP') } }), null)
-  assert.equal(inferredExitRegion({ ...baseRow, ai: { chatgptWeb: mk('JP', 'exit_region_fallback'), chatgptApp: mk('JP'), gemini: mk(null) } }), null)
+  assert.equal(inferredExitRegion({ ...baseRow, ai: { chatgptWeb: mk('JP'), chatgptApp: mk(null), gemini: mk('JP'), antigravity: mk(null) } }), 'JP')
+  assert.equal(inferredExitRegion({ ...baseRow, ai: { chatgptWeb: mk('JP'), chatgptApp: mk(null), gemini: mk(null), antigravity: mk(null) } }), null)
+  assert.equal(inferredExitRegion({ ...baseRow, ai: { chatgptWeb: mk('JP'), chatgptApp: mk('US'), gemini: mk('JP'), antigravity: mk(null) } }), null)
+  assert.equal(inferredExitRegion({ ...baseRow, ai: { chatgptWeb: mk('JP', 'exit_region_fallback'), chatgptApp: mk('JP'), gemini: mk(null), antigravity: mk(null) } }), null)
 })
 
 test('qualityConfig, availabilityStatsSchema, latestNodeQualitySchema, and qualityScheduleConfigSchema validate boundaries', () => {
@@ -105,7 +106,7 @@ test('qualityConfig, availabilityStatsSchema, latestNodeQualitySchema, and quali
       exit: { ip: '192.0.2.1', region: 'US' }, infoNode: false, error: null, updatedAt: now,
     },
     speed: { speedMbps: 55.2, speedFailed: false, updatedAt: now },
-    ai: { results: { chatgptWeb: reading, chatgptApp: reading, gemini: reading }, updatedAt: now },
+    ai: { results: { chatgptWeb: reading, chatgptApp: reading, gemini: reading, antigravity: reading }, updatedAt: now },
     availability: validStats,
   }
   assert.deepEqual(latestNodeQualitySchema.parse(validLatest), validLatest)
@@ -212,12 +213,15 @@ test('Group.qualityDeviceId & QualityCondition.{minAvailability, aiAll, aiSurfac
   // minAvailability + basic metric (maxLatencyMs) on a failed basic check returns 'unavailable' (not 'untested')
   assert.equal(qualityReason({ minAvailability: 0.8, maxLatencyMs: 250 }, { ...baseQuality, available: false, httpsMs: null, availabilityRate: 0.9 }), 'unavailable')
   // T2-F4-02 guard: minAvailability + aiAll with preserved AI remains eligible when latest basic check failed
-  assert.equal(qualityReason({ minAvailability: 0.5, aiAll: true }, { ...baseQuality, available: false, httpsMs: null, availabilityRate: 0.5, reachable: ['chatgptWeb', 'chatgptApp', 'gemini'] }), null)
+  assert.equal(qualityReason({ minAvailability: 0.5, aiAll: true }, { ...baseQuality, available: false, httpsMs: null, availabilityRate: 0.5, reachable: ['chatgptWeb', 'chatgptApp', 'gemini', 'antigravity'] }), null)
 
-  // aiAll requires all 3 surfaces; aiSurfaces requires only selected surfaces
+  // aiAll requires all 4 surfaces; aiSurfaces requires only selected surfaces
   assert.equal(qualityReason({ aiAll: true }, baseQuality), 'platform')
-  assert.equal(qualityReason({ aiAll: true }, { ...baseQuality, reachable: ['chatgptWeb', 'chatgptApp', 'gemini'] }), null)
+  assert.equal(qualityReason({ aiAll: true }, { ...baseQuality, reachable: ['chatgptWeb', 'chatgptApp', 'gemini'] }), 'platform')
+  assert.equal(qualityReason({ aiAll: true }, { ...baseQuality, reachable: ['chatgptWeb', 'chatgptApp', 'gemini', 'antigravity'] }), null)
   assert.equal(qualityReason({ aiSurfaces: ['chatgptWeb', 'gemini'] }, baseQuality), null)
+  assert.equal(qualityReason({ aiSurfaces: ['antigravity'] }, baseQuality), 'platform')
+  assert.equal(qualityReason({ aiSurfaces: ['antigravity'] }, { ...baseQuality, reachable: ['antigravity'] }), null)
 
   // resolvePool end-to-end with minAvailability, aiAll, and relaxWhenEmpty
   const nodes = [
@@ -228,9 +232,9 @@ test('Group.qualityDeviceId & QualityCondition.{minAvailability, aiAll, aiSurfac
   const snapshot: QualitySnapshot = {
     reportId: randomUUID(),
     rows: {
-      's1/n1': { ...baseQuality, availabilityRate: 0.9, reachable: ['chatgptWeb', 'chatgptApp', 'gemini'] },
-      's1/n2': { ...baseQuality, availabilityRate: 0.5, reachable: ['chatgptWeb', 'chatgptApp', 'gemini'] },
-      's1/n3': { ...baseQuality, availabilityRate: 0.95, reachable: ['chatgptWeb', 'gemini'], surfaceIssues: { chatgptApp: 'degraded_challenge' } },
+      's1/n1': { ...baseQuality, availabilityRate: 0.9, reachable: ['chatgptWeb', 'chatgptApp', 'gemini', 'antigravity'] },
+      's1/n2': { ...baseQuality, availabilityRate: 0.5, reachable: ['chatgptWeb', 'chatgptApp', 'gemini', 'antigravity'] },
+      's1/n3': { ...baseQuality, availabilityRate: 0.95, reachable: ['chatgptWeb', 'gemini', 'antigravity'], surfaceIssues: { chatgptApp: 'degraded_challenge' } },
     },
   }
   const filtered = resolvePool(poolCondition({ quality: { minAvailability: 0.8, aiAll: true } }), nodes, snapshot)
@@ -258,7 +262,7 @@ test('nodeQualityFromLatest, latestQualitySnapshot, hasQualityConditions, and av
     basic: null,
     speed: null,
     ai: {
-      results: { chatgptWeb: reading('JP'), chatgptApp: reading('JP'), gemini: reading(null) },
+      results: { chatgptWeb: reading('JP'), chatgptApp: reading('JP'), gemini: reading(null), antigravity: reading(null) },
       updatedAt: now,
     },
     availability: null,
@@ -268,7 +272,7 @@ test('nodeQualityFromLatest, latestQualitySnapshot, hasQualityConditions, and av
   assert.equal(projected.exitRegion, 'JP')
   assert.equal(projected.exitRegionInferred, true)
   assert.equal(projected.availabilityRate, null)
-  assert.deepEqual(projected.reachable, ['chatgptWeb', 'chatgptApp', 'gemini'])
+  assert.deepEqual(projected.reachable, ['chatgptWeb', 'chatgptApp', 'gemini', 'antigravity'])
 
   // Untested speed/basic remain 'untested' because latestQualitySnapshot omits config
   const snap = latestQualitySnapshot({ 's1/n1': aiOnlyRecord }, deviceId)

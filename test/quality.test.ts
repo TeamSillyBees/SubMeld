@@ -12,7 +12,7 @@ import { Impit } from 'impit'
 import { applyExitRegionFallback, classify, googleRegion, inspectPlatforms, verifyGemini } from '../agent/ai.ts'
 import { parseInvite } from '../agent/device.ts'
 import { summarize } from '../agent/measure.ts'
-import { countryCode } from '../agent/regions.ts'
+import { countryCode, countryFromLocation, unlistedRegions } from '../agent/regions.ts'
 import { exportBackup } from '../server/backup.ts'
 import { createQualityService, qualitySpaces } from '../server/quality.ts'
 import { openStore } from '../server/store.ts'
@@ -317,6 +317,8 @@ test('the browser-protocol probe collects separate surface evidence and verifies
     if (path === 'cdn-cgi') { traces.push(host); res.end('ip=192.0.2.15\nloc=JP\n') }
     else if (host === 'gemini.google.com' && !path) res.writeHead(302, { location: '/app' }).end()
     else if (host === 'gemini.google.com' && path === 'app') res.end('<title>Gemini</title>,2,1,200,"USA"')
+    else if (host === 'antigravity.google') res.end('<title>Google Antigravity</title>')
+    else if (host === 'daily-cloudcode-pa.googleapis.com') res.writeHead(404).end('Not Found')
     else if (host === 'api.openai.com') res.end('{"cookie_consent_required":false,"region":"JP"}')
     else if (host === 'android.chat.openai.com') res.writeHead(403).end('{"error":{"code":"unsupported_country_region_territory"}}')
     else res.end('<title>Gemini</title>')
@@ -337,6 +339,9 @@ test('the browser-protocol probe collects separate surface evidence and verifies
   assert.equal(ai.gemini.state, 'reachable')
   assert.equal(ai.gemini.evidence, 'region_disagrees')
   assert.equal(ai.gemini.providerRegion, 'US')
+  assert.equal(ai.antigravity.state, 'reachable')
+  assert.equal(ai.antigravity.evidence, 'region_disagrees')
+  assert.equal(ai.antigravity.providerRegion, 'US')
   assert.deepEqual(traces.sort(), ['chatgpt.com'])
   assert.equal(complianceCalls, 2)
 })
@@ -377,6 +382,9 @@ test('Gemini stops on fragmented page markers and follows at most one same-origi
       return new Response('loc=HK\n')
     }
     if (url.hostname === 'gemini.google.com') {
+      if (url.pathname === '/_/BardChatUi/data/batchexecute') {
+        return new Response(')]}\'\n\n[["wrb.fr","K4WWud","[[\\"Hong Kong\\",\\"SWML_DESCRIPTION_FROM_YOUR_INTERNET_ADDRESS\\"]]"]]', { status: 200 })
+      }
       redirects.push(url.pathname)
       if (url.pathname === '/') return new Response(null, { status: 302, headers: { location: follow } })
       if (appLocation) return new Response(null, { status: 302, headers: { location: appLocation } })
@@ -389,14 +397,19 @@ test('Gemini stops on fragmented page markers and follows at most one same-origi
         cancel() { closed = true },
       }, { highWaterMark: 0 }))
     }
+    if (url.hostname === 'antigravity.google') return new Response('<title>Google Antigravity</title>')
+    if (url.hostname === 'daily-cloudcode-pa.googleapis.com') return new Response(null, { status: 404 })
     assert.ok(['api.openai.com', 'android.chat.openai.com'].includes(url.hostname))
     return new Response(null, { status: 429 })
   })
   const inspect = () => inspectPlatforms({ port: 1, password: 'fixture' }, 'HK', AbortSignal.timeout(3000))
-  const { gemini, chatgptWeb } = await inspect()
+  const { gemini, antigravity, chatgptWeb } = await inspect()
   assert.deepEqual(redirects.splice(0), ['/', '/app'])
   assert.equal(gemini.state, 'reachable')
   assert.equal(gemini.providerRegion, 'HK')
+  assert.equal(antigravity.state, 'region_restricted')
+  assert.equal(antigravity.evidence, 'region_policy')
+  assert.equal(antigravity.providerRegion, 'HK')
   assert.ok(closed)
   assert.equal(traceCalls, 2)
   assert.equal(chatgptWeb.state, 'rate_limited')
@@ -464,6 +477,7 @@ test('M2 3-surface classification, countryCode trimming, 2-host fallback, and di
     chatgptWeb: classify('chatgptWeb', page(403, 'Access denied')),
     chatgptApp: appHtml403,
     gemini: classify('gemini', page(200, '<title>Gemini</title>,2,1,200,"HKG"'), 'HK'),
+    antigravity: classify('antigravity', null),
   }
   const resolved = applyExitRegionFallback(fallbackInput, 'HK', ['HK'])
   assert.equal(resolved.chatgptApp.state, 'region_restricted')
@@ -487,6 +501,7 @@ test('M2 3-surface classification, countryCode trimming, 2-host fallback, and di
       chatgptWeb: classify('chatgptWeb', page(200, '{"cookie_consent_required":false,"countryCode":"JP"}')),
       chatgptApp: classify('chatgptApp', page(200, '{"cf_details":"Request is not allowed. Please try again later."}'), null, 'JP'),
       gemini: classify('gemini', null),
+      antigravity: classify('antigravity', null),
     },
   }
   assert.equal(inferredExitRegion(aiOnlyRow), 'JP')
@@ -528,6 +543,7 @@ test('server quality service normalizes basic: false jobs, validates completion 
     chatgptWeb: classify('chatgptWeb', { status: 200, body: '{"cookie_consent_required":false,"country":"JP"}', location: '', challenge: false }),
     chatgptApp: classify('chatgptApp', { status: 200, body: '{"cf_details":"Request is not allowed. Please try again later."}', location: '', challenge: false }, 'JP', 'JP'),
     gemini: classify('gemini', { status: 200, body: '<title>Gemini</title>,2,1,200,"JPN"', location: '', challenge: false }, 'JP'),
+    antigravity: classify('antigravity', { status: 200, body: '<title>Google Antigravity</title>', location: '', challenge: false }, 'JP', 'JP'),
   }
   const downAi: AiResults = Object.fromEntries(surfaces.map(s => [s, classify(s, null)])) as AiResults
 
@@ -608,6 +624,7 @@ test('quality-latest performs incremental field-level merge across basic/bandwid
     chatgptWeb: classify('chatgptWeb', { status: 200, body: '{"cookie_consent_required":false,"country":"JP"}', location: '', challenge: false }),
     chatgptApp: classify('chatgptApp', { status: 200, body: '{"cf_details":"Request is not allowed. Please try again later."}', location: '', challenge: false }, 'JP', 'JP'),
     gemini: classify('gemini', { status: 200, body: '<title>Gemini</title>,2,1,200,"JPN"', location: '', challenge: false }, 'JP'),
+    antigravity: classify('antigravity', { status: 200, body: '<title>Google Antigravity</title>', location: '', challenge: false }, 'JP', 'JP'),
   }
   const downAi: AiResults = Object.fromEntries(surfaces.map(s => [s, classify(s, null)])) as AiResults
 
@@ -1237,4 +1254,187 @@ test('executeSchedule / tick(nowMs) uses tickNow consistently for offline(), cre
   assert.equal(jobs.length, 2)
   assert.equal(jobs[0].createdAt, new Date(secondTickNow).toISOString())
   assert.equal(service.getSchedule(profile.id).basic.lastRunAt, new Date(secondTickNow).toISOString())
+})
+
+test('googleRegion parses batchexecute SWML locations, SOCS cookies prevent consent loss, and Antigravity enforces decoupled availability & 7-tier priorities', async t => {
+  assert.equal(countryFromLocation('Tokyo, Japan'), 'JP')
+  assert.equal(countryFromLocation('Hong Kong'), 'HK')
+  assert.equal(countryFromLocation('Macau'), 'MO')
+  assert.equal(countryFromLocation('Macao SAR'), 'MO')
+  assert.equal(countryFromLocation('Ashburn, Virginia, United States'), 'US')
+  assert.equal(countryFromLocation('London, UK'), 'GB')
+  assert.equal(countryFromLocation('Taipei, Taiwan'), 'TW')
+  assert.equal(countryFromLocation('Los Angeles, CA'), null)
+
+  const realBatchPayload = ')]}\'\n\n[["wrb.fr","K4WWud","[[\\"Tokyo, Japan\\",\\"SWML_DESCRIPTION_FROM_YOUR_INTERNET_ADDRESS\\",false,null]]",null,null,null,"generic"]]'
+  assert.equal(googleRegion(realBatchPayload), 'JP')
+  assert.equal(googleRegion(')]}\'\n\n[["wrb.fr","K4WWud","[[\\"Hong Kong\\",\\"SWML_DESCRIPTION_FROM_YOUR_INTERNET_ADDRESS\\"]]"]]'), 'HK')
+  assert.equal(googleRegion(')]}\'\n\n[["wrb.fr","K4WWud","[[\\"C\\\\u00f4te d\\\\u0027Ivoire\\",\\"SWML_DESCRIPTION_FROM_YOUR_INTERNET_ADDRESS\\"]]"]]'), 'CI')
+  assert.equal(googleRegion('[["wrb.fr","K4WWud","[[\\"USA\\"]]"]]'), 'US')
+
+  // Decoupled region policy: HK/MO allowed on Gemini, restricted on Antigravity; CN/RU/SY restricted on both
+  for (const code of ['CN', 'HK', 'MO', 'RU', 'BY', 'IR', 'KP', 'CU', 'SY']) {
+    assert.ok(unlistedRegions.Antigravity.has(code), `${code} must be in unlistedRegions.Antigravity`)
+  }
+  assert.equal(unlistedRegions.Gemini.has('HK'), false)
+  assert.equal(unlistedRegions.Gemini.has('MO'), false)
+
+  const page = (status: number, body = '', location = '', challenge = false) => ({ status, body, location, challenge })
+  // 1. network_error
+  assert.deepEqual(classify('antigravity', null, 'JP', 'JP'), {
+    state: 'network_error', evidence: 'network', httpStatus: null, needsReview: false, providerRegion: 'JP',
+  })
+  // 2. /sorry bot_challenge takes priority even if region is restricted
+  assert.deepEqual(classify('antigravity', page(302, '', 'https://www.google.com/sorry/index'), 'HK', 'HK'), {
+    state: 'degraded_challenge', evidence: 'bot_challenge', httpStatus: 302, needsReview: false, providerRegion: 'HK',
+  })
+  assert.equal(classify('antigravity', page(403, 'Our systems have detected unusual traffic from your computer network.')).evidence, 'bot_challenge')
+  // 3. 451 / region_denied
+  assert.equal(classify('antigravity', page(451), 'US', 'US').evidence, 'region_denied')
+  assert.equal(classify('antigravity', page(200, '<p>Your current account is not eligible because it is not currently available in your location.</p>')).evidence, 'region_denied')
+  assert.equal(classify('antigravity', page(302, '', 'https://ai.google.dev/gemini-api/docs/available-regions')).evidence, 'region_denied')
+  // 4. Missing providerRegion -> unknown / region_unconfirmed
+  assert.deepEqual(classify('antigravity', page(200, '<title>Google Antigravity</title>'), 'JP', null), {
+    state: 'unknown', evidence: 'region_unconfirmed', httpStatus: 200, needsReview: true, providerRegion: null,
+  })
+  // 5. unlistedRegions.Antigravity -> region_restricted / region_policy (even if Gemini allows HK)
+  assert.deepEqual(classify('antigravity', page(200, '<title>Google Antigravity</title>'), 'HK', 'HK'), {
+    state: 'region_restricted', evidence: 'region_policy', httpStatus: 200, needsReview: false, providerRegion: 'HK',
+  })
+  // 6. region_disagrees when exitRegion differs from providerRegion
+  assert.deepEqual(classify('antigravity', page(200, '<title>Google Antigravity</title>'), 'HK', 'JP'), {
+    state: 'reachable', evidence: 'region_disagrees', httpStatus: 200, needsReview: false, providerRegion: 'JP',
+  })
+  // 7. web_entry when region matches and is allowed
+  assert.deepEqual(classify('antigravity', page(200, '<title>Google Antigravity</title>'), 'JP', 'JP'), {
+    state: 'reachable', evidence: 'web_entry', httpStatus: 200, needsReview: false, providerRegion: 'JP',
+  })
+
+  // inspectPlatforms integration: SOCS cookie, single Gemini page fetch, batchexecute fallback, and gateway checks
+  let scenario: 'batch_fallback_hk' | 'consent_fallback_us' | 'gateway_down' | 'gateway_401' | 'embedded_region' = 'batch_fallback_hk'
+  const seen = { geminiPage: 0, batch: 0, cookies: [] as string[] }
+  t.mock.method(Impit.prototype, 'fetch', async (input: string, init?: { headers?: Record<string, string>; body?: string; method?: string }) => {
+    const url = new URL(input)
+    if (url.hostname === 'chatgpt.com') return new Response('loc=JP\n')
+    if (url.hostname === 'api.openai.com') return new Response('{"cookie_consent_required":false,"country":"JP"}')
+    if (url.hostname === 'android.chat.openai.com') return new Response('{"cf_details":"Request is not allowed. Please try again later."}', { status: 403 })
+    if (url.hostname === 'gemini.google.com' && url.pathname === '/') {
+      seen.geminiPage++
+      seen.cookies.push(init?.headers?.Cookie ?? '')
+      if (scenario === 'consent_fallback_us') return new Response(null, { status: 302, headers: { location: 'https://consent.google.com/m' } })
+      if (scenario === 'embedded_region') return new Response('<title>Gemini</title>,2,1,200,"USA"')
+      return new Response('<title>Gemini</title>')
+    }
+    if (url.hostname === 'gemini.google.com' && url.pathname === '/_/BardChatUi/data/batchexecute') {
+      seen.batch++
+      seen.cookies.push(init?.headers?.Cookie ?? '')
+      assert.equal(init?.method, 'POST')
+      assert.ok(decodeURIComponent(init?.body ?? '').includes('K4WWud'))
+      const loc = scenario === 'batch_fallback_hk' ? 'Hong Kong' : 'Ashburn, Virginia, United States'
+      return new Response(`)]}'\n\n[["wrb.fr","K4WWud","[[\\"${loc}\\",\\"SWML_DESCRIPTION_FROM_YOUR_INTERNET_ADDRESS\\"]]"]]`)
+    }
+    if (url.hostname === 'antigravity.google') return new Response('<title>Google Antigravity</title>')
+    if (url.hostname === 'daily-cloudcode-pa.googleapis.com') {
+      if (scenario === 'gateway_down') throw new Error('ECONNRESET')
+      return new Response(null, { status: scenario === 'gateway_401' ? 401 : 404 })
+    }
+    throw new Error('Unexpected URL: ' + input)
+  })
+
+  // Case A: Gemini page omits region -> batchexecute returns Hong Kong -> Gemini reachable (HK), Antigravity region_restricted (region_policy)
+  const hkRes = await inspectPlatforms({ port: 1, password: 'fixture' }, 'HK', AbortSignal.timeout(3000))
+  assert.equal(seen.geminiPage, 1)
+  assert.equal(seen.batch, 1)
+  assert.ok(seen.cookies.every(c => c.includes('SOCS=')))
+  assert.equal(hkRes.gemini.state, 'reachable')
+  assert.equal(hkRes.gemini.providerRegion, 'HK')
+  assert.equal(hkRes.antigravity.state, 'region_restricted')
+  assert.equal(hkRes.antigravity.evidence, 'region_policy')
+  assert.equal(hkRes.antigravity.providerRegion, 'HK')
+
+  // Case B: Gemini redirects to consent -> batchexecute returns US -> Antigravity reachable (region_disagrees vs JP), Gemini stays consent_redirect
+  scenario = 'consent_fallback_us'
+  seen.geminiPage = seen.batch = 0
+  const consentRes = await inspectPlatforms({ port: 1, password: 'fixture' }, 'JP', AbortSignal.timeout(3000))
+  assert.equal(seen.batch, 1)
+  assert.equal(consentRes.gemini.evidence, 'consent_redirect')
+  assert.equal(consentRes.antigravity.state, 'reachable')
+  assert.equal(consentRes.antigravity.evidence, 'region_disagrees')
+  assert.equal(consentRes.antigravity.providerRegion, 'US')
+
+  // Case C: Gateway returns 401/403 -> still reachable; gateway connection failure -> network_error
+  scenario = 'gateway_401'
+  const gw401Res = await inspectPlatforms({ port: 1, password: 'fixture' }, 'US', AbortSignal.timeout(3000))
+  assert.equal(gw401Res.antigravity.state, 'reachable')
+  assert.equal(gw401Res.antigravity.evidence, 'web_entry')
+
+  scenario = 'gateway_down'
+  const gwDownRes = await inspectPlatforms({ port: 1, password: 'fixture' }, 'US', AbortSignal.timeout(3000))
+  assert.deepEqual(gwDownRes.antigravity, {
+    state: 'network_error', evidence: 'network', httpStatus: null, needsReview: false, providerRegion: null,
+  })
+
+  // Case D: Embedded region in Gemini page avoids batchexecute request
+  scenario = 'embedded_region'
+  seen.batch = 0
+  const embeddedRes = await inspectPlatforms({ port: 1, password: 'fixture' }, 'US', AbortSignal.timeout(3000))
+  assert.equal(seen.batch, 0)
+  assert.equal(embeddedRes.gemini.state, 'reachable')
+  assert.equal(embeddedRes.antigravity.state, 'reachable')
+  assert.equal(embeddedRes.antigravity.providerRegion, 'US')
+})
+
+test('complete accepts 3-surface protocol v4 (2.0.0) probe AI report by backfilling unknown antigravity reading', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'submeld-quality-compat-200-'))
+  const store = openStore(dir)
+  t.after(async () => { store.close(); await rm(dir, { recursive: true, force: true }) })
+  const profile = { id: randomUUID() } as Profile
+  const nodes = [
+    { key: profile.id + '/node0001', name: 'JP 01', sourceName: 'S', connection: { type: 'http', server: 'localhost', port: 1 } },
+  ]
+  const service = createQualityService(store, (_, keys) => nodes.filter(n => keys.has(n.key)))
+  const secret = randomBytes(32).toString('base64url')
+  const worker = randomBytes(32).toString('base64url')
+  const v200Caps = { ...capabilities, agentVersion: '2.0.0' }
+  const ticket = parseInvite(service.invite(profile.id, 'https://submeld.test').pairing).ticket
+  service.agent('enroll', ticket, { profileId: profile.id, name: 'Legacy 2.0.0 Probe', platform: 'linux', secret, capabilities: v200Caps })
+  const deviceId = service.devices(profile.id)[0].id
+
+  const queued = service.queue(profile, {
+    targetDeviceId: deviceId,
+    keys: [nodes[0].key],
+    config: { ...qualityDefaults, basic: false, ai: true },
+  })
+  const assignment = service.agent('poll', secret, { profileId: profile.id, worker, capabilities: v200Caps }) as Assignment
+  assert.equal(assignment.jobId, queued.id)
+
+  const okAi3 = {
+    chatgptWeb: classify('chatgptWeb', { status: 200, body: '{"cookie_consent_required":false,"country":"JP"}', location: '', challenge: false }),
+    chatgptApp: classify('chatgptApp', { status: 200, body: '{"cf_details":"Request is not allowed. Please try again later."}', location: '', challenge: false }, 'JP', 'JP'),
+    gemini: classify('gemini', { status: 200, body: '<title>Gemini</title>,2,1,200,"JPN"', location: '', challenge: false }, 'JP'),
+  }
+  const payload = {
+    profileId: profile.id,
+    jobId: queued.id,
+    report: {
+      schemaVersion: 1,
+      jobId: queued.id,
+      startedAt: queued.createdAt,
+      finishedAt: queued.createdAt,
+      results: [{
+        key: nodes[0].key, available: true, error: null, samples: [],
+        tlsMedianMs: null, httpsMedianMs: null, jitterMs: null, lossRate: null,
+        exit: { ip: '192.0.2.1', region: 'JP' }, speed: null, ai: okAi3,
+      }],
+    },
+  }
+
+  assert.deepEqual(service.agent('complete', worker, payload), { ok: true })
+  const stored = service.report(profile.id, queued.id)
+  assert.deepEqual(stored.results[0].ai?.antigravity, {
+    state: 'unknown', evidence: 'unrecognized', httpStatus: null, needsReview: true, providerRegion: null,
+  })
+  assert.deepEqual(service.latest(profile.id, deviceId)[nodes[0].key].ai?.results?.antigravity, {
+    state: 'unknown', evidence: 'unrecognized', httpStatus: null, needsReview: true, providerRegion: null,
+  })
 })

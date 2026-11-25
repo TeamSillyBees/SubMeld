@@ -521,7 +521,28 @@ export function createQualityService(
           store.set(spaces.jobs, job.id, job)
         })
       } else if (action === 'complete') {
-        const report = read(reportSchema, body.report)
+        const rawReport = typeof body.report === 'object' && body.report !== null && Array.isArray((body.report as { results?: unknown }).results)
+          ? {
+              ...(body.report as Record<string, unknown>),
+              results: ((body.report as { results: unknown[] }).results).map(item => {
+                if (typeof item !== 'object' || item === null) return item
+                const rowObj = item as Record<string, unknown>
+                if (typeof rowObj.ai !== 'object' || rowObj.ai === null || Array.isArray(rowObj.ai)) return item
+                const aiObj = rowObj.ai as Record<string, unknown>
+                if (!('antigravity' in aiObj) && 'chatgptWeb' in aiObj && 'chatgptApp' in aiObj && 'gemini' in aiObj) {
+                  return {
+                    ...rowObj,
+                    ai: {
+                      ...aiObj,
+                      antigravity: { state: 'unknown', evidence: 'unrecognized', httpStatus: null, needsReview: true, providerRegion: null },
+                    },
+                  }
+                }
+                return item
+              }),
+            }
+          : body.report
+        const report = read(reportSchema, rawReport)
         const rows = new Map(report.results.map(row => [row.key, row]))
         if (report.jobId !== job.id || report.results.length !== job.total || !job.labels.every(({ key }) => rows.has(key))) {
           throw new UserError('结果与本次任务的节点不匹配。', 422)

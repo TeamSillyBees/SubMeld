@@ -270,7 +270,7 @@ test('real Mihomo isolates 205 nodes, discards invalid configurations and enforc
     const ai = await inspectPlatforms(route.outlet, 'JP', signal)
     assert.ok(surfaces.every(s => ai[s].state === 'network_error' && !ai[s].needsReview))
   })
-  assert.deepEqual([...aiHosts].sort(), ['android.chat.openai.com', 'api.openai.com', 'chatgpt.com', 'gemini.google.com'].map(h => h + ':443').sort())
+  assert.deepEqual([...aiHosts].sort(), ['android.chat.openai.com', 'antigravity.google', 'api.openai.com', 'chatgpt.com', 'daily-cloudcode-pa.googleapis.com', 'gemini.google.com'].map(h => h + ':443').sort())
   assert.ok(offered.has('h2'))
   const reused = net.createServer()
   reused.listen(usedPort, '127.0.0.1')

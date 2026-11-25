@@ -104,11 +104,13 @@ test('selects across pages, pairs the PC probe, verifies unified AI & availabili
       chatgptWeb: classify('chatgptWeb', { status: 403, body: '', location: '', challenge: true }),
       chatgptApp: classify('chatgptApp', { status: 403, body: '{"cf_details":"Request is not allowed. Please try again later."}', location: '', challenge: false }, null, 'JP'),
       gemini: classify('gemini', { status: 451, body: '', location: '', challenge: false }, null, 'JP'),
+      antigravity: classify('antigravity', { status: 200, body: '<title>Google Antigravity</title>', location: '', challenge: false }, 'HK', 'HK'),
     } satisfies NonNullable<QualityRow['ai']>
     const unlockedAi = {
       chatgptWeb: classify('chatgptWeb', { status: 200, body: '{"cookie_consent_required":false}', location: '', challenge: false }, null, 'JP'),
       chatgptApp: classify('chatgptApp', { status: 403, body: '{"cf_details":"Request is not allowed. Please try again later."}', location: '', challenge: false }, null, 'JP'),
       gemini: classify('gemini', { status: 200, body: '<title>Gemini</title>"K4WWud":["JP"]', location: '', challenge: false }, 'JP'),
+      antigravity: classify('antigravity', { status: 200, body: '<title>Google Antigravity</title>', location: '', challenge: false }, 'JP', 'JP'),
     } satisfies NonNullable<QualityRow['ai']>
 
     const results: QualityRow[] = job.nodes.map(({ key }, i) => {
@@ -132,7 +134,7 @@ test('selects across pages, pairs the PC probe, verifies unified AI & availabili
 
     const firstRow = dialog.locator('tbody tr', { hasText: '东京 001' })
     const firstAiItems = firstRow.locator('[data-col="ai"] [data-surface]')
-    await expect(firstAiItems).toHaveCount(3)
+    await expect(firstAiItems).toHaveCount(4)
     await expect(firstAiItems.nth(0)).toContainText('ChatGPT Web')
     await expect(firstAiItems.nth(0).locator('[data-slot="badge"]')).toHaveAttribute('data-tone', 'warning')
     await expect(firstAiItems.nth(0).locator('[data-slot="badge"]')).toHaveText('未知')
@@ -142,6 +144,9 @@ test('selects across pages, pairs the PC probe, verifies unified AI & availabili
     await expect(firstAiItems.nth(2)).toContainText('Gemini Web')
     await expect(firstAiItems.nth(2).locator('[data-slot="badge"]')).toHaveAttribute('data-tone', 'danger')
     await expect(firstAiItems.nth(2).locator('[data-slot="badge"]')).toHaveText('受限')
+    await expect(firstAiItems.nth(3)).toContainText('Antigravity')
+    await expect(firstAiItems.nth(3).locator('[data-slot="badge"]')).toHaveAttribute('data-tone', 'danger')
+    await expect(firstAiItems.nth(3).locator('[data-slot="badge"]')).toHaveText('受限')
 
     await capture('results-mobile')
     await page.setViewportSize({ width: 1440, height: 940 })
@@ -165,6 +170,7 @@ test('selects across pages, pairs the PC probe, verifies unified AI & availabili
     await expect(dialog.locator('.quality-ai')).toContainText('ChatGPT Web')
     await expect(dialog.locator('.quality-ai')).toContainText('ChatGPT APP')
     await expect(dialog.locator('.quality-ai')).toContainText('Gemini Web')
+    await expect(dialog.locator('.quality-ai')).toContainText('Antigravity')
     await expect(dialog).not.toContainText(/grok|claude/i)
     await expect(dialog.getByText(/应用网关已响应 · HTTP 403/)).toBeVisible()
     await expect(dialog.getByText(/Cloudflare 挑战/)).toBeVisible()
@@ -376,6 +382,7 @@ test('selects across pages, pairs the PC probe, verifies unified AI & availabili
     await expect(refreshed001).toContainText('1/2')
     await expect(refreshed001.locator('[data-col="ai"] [data-surface]').nth(0)).toContainText('JP')
     await expect(refreshed001.locator('[data-col="ai"] [data-surface]').nth(2)).toContainText('JP')
+    await expect(refreshed001.locator('[data-col="ai"] [data-surface]').nth(3)).toContainText('JP')
 
     // Unpair probe in #/quality/probes at the end of the flow
     await page.goto(base + '/#/quality/probes')

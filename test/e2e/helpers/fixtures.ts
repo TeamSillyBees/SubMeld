@@ -716,5 +716,5 @@ export function assertNoLegacyAiStrings(input: unknown, path = '$'): void {
 export function assertThreeSurfaceAi(ai: unknown): asserts ai is AiResults {
   assert.ok(ai && typeof ai === 'object' && !Array.isArray(ai), 'Expected AI results object')
   const keys = Object.keys(ai).sort()
-  assert.deepEqual(keys, ['chatgptApp', 'chatgptWeb', 'gemini'])
+  assert.deepEqual(keys, ['antigravity', 'chatgptApp', 'chatgptWeb', 'gemini'])
 }

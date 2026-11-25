@@ -174,7 +174,9 @@ test('cleanupLegacyQualityData scrubs all 5 spaces idempotently, preserves invit
 
   // Verify quality-reports cleaned
   const report = store.get(spaces.reports, reportId)!
-  assert.deepEqual(Object.keys(report.results[0].ai!).sort(), ['chatgptApp', 'chatgptWeb', 'gemini'])
+  assert.deepEqual(Object.keys(report.results[0].ai!).sort(), ['antigravity', 'chatgptApp', 'chatgptWeb', 'gemini'])
+  assert.equal(report.results[0].ai!.antigravity.state, 'unknown')
+  assert.equal(report.results[0].ai!.antigravity.needsReview, true)
   assert.equal(report.results[1].ai, null)
   assert.equal(report.results[2].ai, null)
 
@@ -246,7 +248,7 @@ test('createApplication runs cleanupLegacyQualityData automatically on startup',
       assert.equal(reopened.get(spaces.device, 'registration' as never), null)
       assert.equal(reopened.get(spaces.device, 'next' as never), null)
       assert.ok(reopened.get(spaces.device, 'invite'))
-      assert.deepEqual(Object.keys(reopened.get(spaces.reports, reportId)!.results[0].ai!).sort(), ['chatgptApp', 'chatgptWeb', 'gemini'])
+      assert.deepEqual(Object.keys(reopened.get(spaces.reports, reportId)!.results[0].ai!).sort(), ['antigravity', 'chatgptApp', 'chatgptWeb', 'gemini'])
     } finally {
       reopened.close()
     }
@@ -340,11 +342,12 @@ test('cleanupLegacyQualityData normalizes partial legacy ai maps without crashin
   assert.equal(summary.updated, 2)
 
   const cleanedReport = store.get(spaces.reports, reportId)!
-  assert.deepEqual(Object.keys(cleanedReport.results[0].ai!).sort(), ['chatgptApp', 'chatgptWeb', 'gemini'])
+  assert.deepEqual(Object.keys(cleanedReport.results[0].ai!).sort(), ['antigravity', 'chatgptApp', 'chatgptWeb', 'gemini'])
   assert.equal(cleanedReport.results[0].ai!.chatgptWeb.state, 'reachable')
   assert.equal(cleanedReport.results[0].ai!.chatgptApp.state, 'unknown')
   assert.equal(cleanedReport.results[0].ai!.gemini.state, 'unknown')
-  assert.deepEqual(Object.keys(cleanedReport.results[1].ai!).sort(), ['chatgptApp', 'chatgptWeb', 'gemini'])
+  assert.equal(cleanedReport.results[0].ai!.antigravity.state, 'unknown')
+  assert.deepEqual(Object.keys(cleanedReport.results[1].ai!).sort(), ['antigravity', 'chatgptApp', 'chatgptWeb', 'gemini'])
   assert.equal(cleanedReport.results[1].ai!.gemini.state, 'region_restricted')
 
   // Must not throw TypeError in qualitySnapshot / platformVerdict
@@ -354,7 +357,7 @@ test('cleanupLegacyQualityData normalizes partial legacy ai maps without crashin
   assert.equal(snap.rows['src-partial/node0002'].platforms?.Gemini, 'region_restricted')
 
   const cleanedLatest = store.get(spaces.latest, `${deviceId}/src-partial/node0001`)!
-  assert.deepEqual(Object.keys(cleanedLatest.ai!.results!).sort(), ['chatgptApp', 'chatgptWeb', 'gemini'])
+  assert.deepEqual(Object.keys(cleanedLatest.ai!.results!).sort(), ['antigravity', 'chatgptApp', 'chatgptWeb', 'gemini'])
   const latestSnap = latestQualitySnapshot({ 'src-partial/node0001': cleanedLatest }, deviceId)
   assert.deepEqual(latestSnap.rows['src-partial/node0001'].reachable, ['chatgptWeb'])
 

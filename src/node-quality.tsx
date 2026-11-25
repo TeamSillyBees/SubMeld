@@ -6,7 +6,7 @@ import { Badge, Button } from './ui.tsx'
 
 export const qualitySortLabels: Record<QualitySort, string> = {
   https: 'HTTPS 延迟', tls: 'TLS RTT', loss: '丢包率', jitter: '抖动', speed: '下载带宽', availability: '可用率', ai: '综合解锁度',
-  ChatGPT: 'ChatGPT', Gemini: 'Gemini Web',
+  ChatGPT: 'ChatGPT', Gemini: 'Gemini Web', Antigravity: 'Antigravity',
 }
 export const stateLabels: Record<AiReading['state'], string> = {
   reachable: '入口可达', unavailable: '不可用', authentication: '需要登录', region_restricted: '地区受限', region_mismatch: '地区不一致',

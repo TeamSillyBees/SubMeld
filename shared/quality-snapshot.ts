@@ -4,9 +4,9 @@ export type { AvailabilityStats, LatestNodeQuality } from './quality.ts'
 export type LatestQualityMap = Record<string, Record<string, LatestNodeQuality>>
 
 export const platformSurfaces = {
-  ChatGPT: ['chatgptWeb', 'chatgptApp'], Gemini: ['gemini'],
+  ChatGPT: ['chatgptWeb', 'chatgptApp'], Gemini: ['gemini'], Antigravity: ['antigravity'],
 } as const satisfies Record<string, readonly Surface[]>
-export const platforms = ['ChatGPT', 'Gemini'] as const
+export const platforms = ['ChatGPT', 'Gemini', 'Antigravity'] as const
 export type Platform = typeof platforms[number]
 export const qualitySorts = ['https', 'tls', 'loss', 'jitter', 'speed', 'availability', 'ai', ...platforms] as const
 export type QualitySort = typeof qualitySorts[number]

@@ -336,7 +336,7 @@ test.describe('F2 Boundaries: Legacy Compat Drop & Startup Data Cleanup', () => 
     assert.ok(scrubbedPartial)
     assert.equal(scrubbedPartial.results[0], 'bad-non-object-row')
     assert.equal((scrubbedPartial.results[1] as { ai: unknown }).ai, null)
-    assert.deepEqual(Object.keys((scrubbedPartial.results[2] as { ai: Record<string, unknown> }).ai).sort(), ['chatgptApp', 'chatgptWeb', 'gemini'])
+    assert.deepEqual(Object.keys((scrubbedPartial.results[2] as { ai: Record<string, unknown> }).ai).sort(), ['antigravity', 'chatgptApp', 'chatgptWeb', 'gemini'])
     assert.equal((scrubbedPartial.results[3] as { ai: unknown }).ai, null)
     assertNoLegacyAiStrings(scrubbedPartial)
 

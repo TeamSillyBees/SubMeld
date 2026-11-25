@@ -24,8 +24,8 @@ export function compatibleProbe(device: { protocolVersion?: number; agentVersion
   return true
 }
 export const qualityDefaults = { basic: true, rounds: 3, concurrency: 6, bandwidth: false, speedConcurrency: 1, seconds: 5, mebibytes: 4, ai: true }
-export const surfaces = ['chatgptWeb', 'chatgptApp', 'gemini'] as const
+export const surfaces = ['chatgptWeb', 'chatgptApp', 'gemini', 'antigravity'] as const
 export type Surface = typeof surfaces[number]
 export const surfaceNames: Record<Surface, string> = {
-  chatgptWeb: 'ChatGPT Web', chatgptApp: 'ChatGPT APP', gemini: 'Gemini Web',
+  chatgptWeb: 'ChatGPT Web', chatgptApp: 'ChatGPT APP', gemini: 'Gemini Web', antigravity: 'Antigravity',
 }

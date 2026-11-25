@@ -149,7 +149,7 @@ function QualityDialog({ selected, filtered, close, supplement, bandwidth }: { s
             <NumberChoice label="最长时长" value={config.seconds} options={[2, 5, 10, 15]} unit=" 秒" onChange={n => set('seconds', n)} />
             <NumberChoice label="下载并发" value={config.speedConcurrency} options={[1, 2]} onChange={n => set('speedConcurrency', n)} /></FieldGroup>}</section>
         <section className="quality-section"><Toggle label="AI 平台检测" checked={config.ai} onChange={v => set('ai', v)}
-          detail="逐节点检查 ChatGPT Web、ChatGPT APP 与 Gemini Web 的公开入口。弱网节点会跳过。" /></section>
+          detail="逐节点检查 ChatGPT Web、ChatGPT APP、Gemini Web 与 Antigravity 的公开入口。弱网节点会跳过。" /></section>
         {invalidConfig && <Alert tone="warning">常规质量检测和 AI 平台检测至少启用一项。</Alert>}
       </>}
       {job?.status === 'waiting' && <>

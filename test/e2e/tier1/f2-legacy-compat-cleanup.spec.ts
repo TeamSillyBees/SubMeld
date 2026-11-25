@@ -151,6 +151,7 @@ test.describe('Tier 1 — F2: Drop Legacy Agent Compat & Cleanup Stored Data', (
             chatgptWeb: { state: 'reachable' as const, evidence: 'compliance_json' as const, httpStatus: 200, needsReview: false, providerRegion: 'US' },
             chatgptApp: { state: 'reachable' as const, evidence: 'app_gateway' as const, httpStatus: 200, needsReview: false, providerRegion: 'US' },
             gemini: { state: 'reachable' as const, evidence: 'web_entry' as const, httpStatus: 200, needsReview: false, providerRegion: 'US' },
+            antigravity: { state: 'reachable' as const, evidence: 'web_entry' as const, httpStatus: 200, needsReview: false, providerRegion: 'US' },
           },
         })),
       }

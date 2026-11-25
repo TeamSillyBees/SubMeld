@@ -35,18 +35,21 @@ test('quality ordering and pool diagnostics handle missing, failed, tied and par
   assert.deepEqual(resolvePool({ ...condition, regions: ['US'] }, candidates, snapshot).matches, [])
   assert.equal(qualityValue(reading, 'ai'), 5)
   assert.equal(qualityValue(reading, 'ChatGPT'), 2)
-  assert.equal(qualityValue({ ...reading, platforms: { ChatGPT: null, Gemini: 'blocked_or_unreachable' } }, 'ai'), -1)
+  assert.equal(qualityValue({ ...reading, platforms: { ChatGPT: null, Gemini: 'blocked_or_unreachable', Antigravity: null } }, 'ai'), -1)
   assert.ok(compareQuality(reading, snapshot.rows.slow, 'loss') < 0)
   assert.ok(compareQuality(reading, snapshot.rows.partial, 'speed') < 0)
   assert.ok(compareQuality(snapshot.rows.failed, undefined, 'tls') > 0)
   assert.equal(compareQuality({ ...reading, reachable: ['chatgptWeb'] }, { ...reading, reachable: null }, 'Gemini'), 0)
+  assert.equal(qualityReason({ aiSurfaces: ['antigravity'] }, { ...reading, reachable: ['chatgptWeb', 'gemini', 'antigravity'] }), null)
+  assert.equal(qualityReason({ aiSurfaces: ['antigravity'] }, reading), 'platform')
+  assert.ok(compareQuality({ ...reading, reachable: ['antigravity'] }, { ...reading, reachable: ['gemini'] }, 'Antigravity') < 0)
 })
 
 test('fixed buckets, cascade ties, capability guards and two-tier fallbacks also apply to ranked group output', () => {
   const node = (key: string) => ({ key, name: key, kept: true, region: 'TW', sourceId: 'source01' })
   const snapshot: QualitySnapshot = { reportId: randomUUID(), config: { ai: true, bandwidth: false }, rows: {
-    fast: { ...reading, jitterMs: 2, exitRegion: 'HK', surfaceIssues: { chatgptApp: 'degraded_challenge' }, platforms: { ChatGPT: 'degraded_challenge', Gemini: 'unlocked' } },
-    smooth: { ...reading, jitterMs: 1, exitRegion: 'TW', platforms: { ChatGPT: 'partial_unlock', Gemini: 'unlocked' } },
+    fast: { ...reading, jitterMs: 2, exitRegion: 'HK', surfaceIssues: { chatgptApp: 'degraded_challenge' }, platforms: { ChatGPT: 'degraded_challenge', Gemini: 'unlocked', Antigravity: 'region_restricted' } },
+    smooth: { ...reading, jitterMs: 1, exitRegion: 'TW', platforms: { ChatGPT: 'partial_unlock', Gemini: 'unlocked', Antigravity: 'unlocked' } },
     unstable: { ...reading, httpsMs: 250, lossRate: .2, jitterMs: 80, exitRegion: 'TW', platforms: null },
     missing: { ...reading, lossRate: null }, dead: { ...reading, available: false }, notice: { ...reading, available: false, infoNode: true },
   } }
@@ -101,8 +104,8 @@ test('platform verdicts preserve confirmed entry evidence and rank usable platfo
     assert.equal(platformVerdict({ ...ai, chatgptWeb: readingFor(web), chatgptApp: readingFor(app) }, 'ChatGPT'), expected)
     assert.equal(platformVerdict({ ...ai, chatgptWeb: readingFor(app), chatgptApp: readingFor(web) }, 'ChatGPT'), expected)
   }
-  const challenge: NodeQuality = { ...reading, platforms: { ChatGPT: 'degraded_challenge', Gemini: 'degraded_challenge' } }
-  const usable: NodeQuality = { ...reading, platforms: { ChatGPT: 'unlocked', Gemini: 'region_restricted' } }
+  const challenge: NodeQuality = { ...reading, platforms: { ChatGPT: 'degraded_challenge', Gemini: 'degraded_challenge', Antigravity: null } }
+  const usable: NodeQuality = { ...reading, platforms: { ChatGPT: 'unlocked', Gemini: 'region_restricted', Antigravity: null } }
   const offline: NodeQuality = { ...usable, platforms: { ...usable.platforms!, Gemini: 'blocked_or_unreachable' } }
   assert.equal(qualityValue(usable, 'ai'), 3)
   assert.equal(qualityValue(challenge, 'ai'), 2)

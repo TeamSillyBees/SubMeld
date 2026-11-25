@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 
-export const E2E_SURFACES = ['chatgptWeb', 'chatgptApp', 'gemini'] as const
+export const E2E_SURFACES = ['chatgptWeb', 'chatgptApp', 'gemini', 'antigravity'] as const
 export type Surface = typeof E2E_SURFACES[number]
 
 export const E2E_PROBE_PROTOCOL = 4
@@ -198,10 +198,14 @@ export const aiReading = {
 }
 
 export function buildAiResults(partial: Partial<AiResults> = {}, defaultRegion: string | null = 'US'): AiResults {
+  const antigravityDefault = partial.gemini
+    ? { ...partial.gemini, providerRegion: null }
+    : aiReading.green(defaultRegion, 'antigravity')
   return {
     chatgptWeb: partial.chatgptWeb ?? aiReading.green(defaultRegion, 'chatgptWeb'),
     chatgptApp: partial.chatgptApp ?? aiReading.green(defaultRegion, 'chatgptApp'),
     gemini: partial.gemini ?? aiReading.green(defaultRegion, 'gemini'),
+    antigravity: partial.antigravity ?? antigravityDefault,
   }
 }
 
@@ -214,6 +218,7 @@ export const aiPresets = {
       chatgptWeb: aiReading.restricted('region_restricted', providerRegion),
       chatgptApp: aiReading.restricted('ip_blocked', null),
       gemini: aiReading.restricted('unavailable', null),
+      antigravity: aiReading.restricted('region_restricted', null),
     }
   },
   mixed(region: string | null = 'US'): AiResults {
@@ -221,6 +226,7 @@ export const aiPresets = {
       chatgptWeb: aiReading.green(region, 'chatgptWeb'),
       chatgptApp: aiReading.restricted('region_restricted', 'HK'),
       gemini: aiReading.uncertain('challenge', null),
+      antigravity: aiReading.uncertain('challenge', null),
     }
   },
 }
@@ -379,7 +385,7 @@ export interface RowSpecOverride {
   exit?: QualityExit | null
   speed?: SpeedReading | null
   speedMbps?: number | null
-  ai?: AiResults | null
+  ai?: Partial<AiResults> | null
   aiSkipped?: 'missing_exit' | 'weak_connection'
 }
 
@@ -415,6 +421,7 @@ function allNetworkErrorAi(): AiResults {
     chatgptWeb: aiReading.uncertain('network_error'),
     chatgptApp: aiReading.uncertain('network_error'),
     gemini: aiReading.uncertain('network_error'),
+    antigravity: aiReading.uncertain('network_error'),
   }
 }
 
@@ -473,7 +480,7 @@ export function buildQualityRow(
         exit: spec.exit === undefined ? null : spec.exit,
         aiSkipped,
         speed: null,
-        ai: spec.ai === undefined ? null : spec.ai,
+        ai: spec.ai ? buildAiResults(spec.ai, defaultRegion) : null,
       }
     }
 
@@ -484,7 +491,7 @@ export function buildQualityRow(
     let ai: AiResults | null = null
     if (config.ai) {
       if (spec.ai !== undefined) {
-        ai = spec.ai
+        ai = spec.ai ? buildAiResults(spec.ai, exit?.region ?? defaultRegion) : null
       } else if (aiSkipped) {
         ai = null
       } else if (spec.available === false) {
@@ -554,7 +561,7 @@ export function buildQualityRow(
   let aiSkipped = spec.aiSkipped
   if (config.ai && available) {
     if (spec.ai !== undefined) {
-      ai = spec.ai
+      ai = spec.ai ? buildAiResults(spec.ai, exit?.region ?? defaultRegion) : null
     } else if (aiSkipped) {
       ai = null
     } else if ((lossRate ?? 0) >= 0.5 || (httpsMedianMs ?? 0) >= 4000) {

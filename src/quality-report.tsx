@@ -21,7 +21,7 @@ const evidenceLabels: Record<AiReading['evidence'], string> = {
   compliance_json: '合规接口返回有效 JSON', app_gateway: '应用网关已响应', http_denied: '入口拒绝请求或返回故障提示',
   web_entry: '识别到产品入口页', login_redirect: '入口转向登录页', credentials_required: '接口返回认证要求',
   region_denied: '平台响应或地区政策表明该地区受限', region_disagrees: 'Google 识别地区与出口地区不同',
-  region_unconfirmed: '无法确认个人账号适用地区', cf_challenge: '响应要求浏览器验证', ip_denied: '服务明确封禁出口 IP',
+  region_unconfirmed: '无法确认平台适用地区', cf_challenge: '响应要求浏览器验证', ip_denied: '服务明确封禁出口 IP',
   region_policy: '平台地区命中受限地区表', exit_region_fallback: '按通用出口和其他平台的一致地区推定',
   bot_challenge: 'Google 要求验证异常流量', consent_redirect: '入口转向 Google 同意页', disallowed_isp: '网关明确限制运营商、VPN 或代理',
   rate_limit: '服务要求降低请求频率', unrecognized: '响应缺少明确判据', network: '请求失败或超时',
